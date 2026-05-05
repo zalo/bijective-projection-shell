@@ -389,11 +389,13 @@ async function rebuild() {
     ({ V, F } = indexAndDedupe(geom));
   }
 
-  // 1. Build the *real* PrismCage. thickness is interpreted as the dooseps
-  //    bound (target thickness as fraction of bbox).
+  // 1. Build the *real* PrismCage. The slider drives `initial_step`, which
+  //    is the absolute extrusion distance along vertex normals (the AABB
+  //    tree retracts it per-vertex if it would self-intersect). The 3rd
+  //    arg is the Doo-Sabin bevel epsilon for singular vertices.
   let shell;
   try {
-    shell = Module.buildShell(Array.from(V), Array.from(F), thickness, 1e-4);
+    shell = Module.buildShell(Array.from(V), Array.from(F), 5e-3, thickness);
   } catch (e) {
     setError("buildShell threw: " + (e?.message || e));
     return;
