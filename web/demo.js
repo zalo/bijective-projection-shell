@@ -132,7 +132,7 @@ async function getManifoldModule() {
   if (manifoldModulePromise) return manifoldModulePromise;
   manifoldModulePromise = (async () => {
     const Module = (await import(
-      "https://unpkg.com/manifold-3d@3.4.1/manifold.js")).default;
+      "https://cdn.jsdelivr.net/npm/manifold-3d@3.4.1/manifold.js")).default;
     const m = await Module();
     m.setup();
     m.setCircularSegments(48);  // controls cylinder/sphere tessellation
@@ -291,17 +291,44 @@ function sampleQueriesInShell(baseV, midV, topV, F, nQ) {
 }
 
 // ---------- three.js builders ----------
-function buildSurfaceMesh(V, F, color, opacity = 1.0) {
+function buildSurfaceMesh(V, F, color, opacity = 1.0, thickness = null) {
   const geo = new THREE.BufferGeometry();
   const pos = new Float32Array(V.length);
   for (let i = 0; i < V.length; i++) pos[i] = V[i];
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(F.buffer, F.byteOffset, F.length), 1));
   geo.computeVertexNormals();
-  const mat = new THREE.MeshStandardMaterial({
-    color, metalness: 0.05, roughness: 0.55, flatShading: false,
-    transparent: opacity < 1, opacity, side: THREE.DoubleSide,
-  });
+
+  let mat;
+  if (thickness) {
+    // Vertex-color the surface by per-vertex shell thickness — blue = pinched
+    // to zero, magenta = full target thickness. Makes the "where did the
+    // PrismCage refuse to thicken" pattern obvious.
+    let mx = 0;
+    for (const t of thickness) if (t > mx) mx = t;
+    if (mx <= 0) mx = 1;
+    const colors = new Float32Array(V.length);
+    for (let i = 0; i < V.length / 3; i++) {
+      const t = Math.min(thickness[i] / mx, 1);
+      // turbo-ish ramp: blue (cold) → cyan → green → yellow → red (hot)
+      const r = Math.min(1, Math.max(0, 1.5 - Math.abs(4 * t - 3)));
+      const g = Math.min(1, Math.max(0, 1.5 - Math.abs(4 * t - 2)));
+      const b = Math.min(1, Math.max(0, 1.5 - Math.abs(4 * t - 1)));
+      colors[3 * i] = r;
+      colors[3 * i + 1] = g;
+      colors[3 * i + 2] = b;
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    mat = new THREE.MeshStandardMaterial({
+      vertexColors: true, metalness: 0.05, roughness: 0.55,
+      transparent: opacity < 1, opacity, side: THREE.DoubleSide,
+    });
+  } else {
+    mat = new THREE.MeshStandardMaterial({
+      color, metalness: 0.05, roughness: 0.55, flatShading: false,
+      transparent: opacity < 1, opacity, side: THREE.DoubleSide,
+    });
+  }
   return new THREE.Mesh(geo, mat);
 }
 
@@ -400,15 +427,18 @@ async function rebuild() {
   //    arg is the Doo-Sabin bevel epsilon for singular vertices.
   let shell;
   try {
-    shell = Module.buildShell(Array.from(V), Array.from(F), 5e-3, thickness);
+    shell = Module.buildShell(Array.from(V), Array.from(F), 0.2, thickness);
   } catch (e) {
     setError("buildShell threw: " + (e?.message || e));
     return;
   }
+  window.__lastShell = shell;
   const midV = vecToFloat64(shell.midV);
   const baseV = vecToFloat64(shell.baseV);
   const topV = vecToFloat64(shell.topV);
   const Fout = vecToInt32(shell.F);
+  const thicknessArr = shell.thickness ? vecToFloat64(shell.thickness) : null;
+  console.log("shell keys:", Object.keys(shell), "thickness present:", !!shell.thickness, "size:", shell.thickness?.size?.());
   deleteVecs(shell);
 
   if (!Fout.length) {
@@ -439,7 +469,7 @@ async function rebuild() {
   const showQueries = document.getElementById("showQueries").checked;
 
   if (showSurface) {
-    root.add(buildSurfaceMesh(midV, Fout, 0x7aa9ff, 0.85));
+    root.add(buildSurfaceMesh(midV, Fout, 0x7aa9ff, 0.85, thicknessArr));
   }
   if (showShell) {
     root.add(buildWireMesh(baseV, Fout, 0x22aa55, 1.0));
@@ -461,11 +491,21 @@ async function rebuild() {
   const lower = stratum.reduce((a, s) => a + (s === 0 ? 1 : 0), 0);
   const upper = stratum.reduce((a, s) => a + (s === 1 ? 1 : 0), 0);
   const dt = performance.now() - t0;
+  let thickStats = "";
+  if (thicknessArr && thicknessArr.length) {
+    let tmin = Infinity, tmax = 0, tsum = 0, zeros = 0;
+    for (const t of thicknessArr) {
+      if (t < tmin) tmin = t; if (t > tmax) tmax = t; tsum += t;
+      if (t < 1e-6) zeros++;
+    }
+    const tmean = tsum / thicknessArr.length;
+    thickStats = ` · thickness min=${tmin.toExponential(2)} mean=${tmean.toFixed(4)} max=${tmax.toFixed(4)} zero=${zeros}`;
+  }
   setStatus(
     `${geomName} · input V=${V.length / 3} F=${F.length / 3} · ` +
     `cage V=${midV.length / 3} F=${Fout.length / 3} · ` +
     `queries=${nQ} hit=${hits} (lower=${lower}, upper=${upper}) · ` +
-    `${dt.toFixed(0)} ms`);
+    `${dt.toFixed(0)} ms` + thickStats);
   setError("");
 }
 

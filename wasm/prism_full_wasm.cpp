@@ -48,6 +48,9 @@ struct ShellResult {
   std::vector<double> topV;   // n*3
   std::vector<int> F;          // m*3
   int numFreeze = 0;
+  // per-vertex shell thickness (||top - base||) — useful for diagnosing
+  // pinched regions in the demo.
+  std::vector<double> thickness;
 };
 
 struct ProjectionResult {
@@ -98,6 +101,12 @@ ShellResult buildShell(emscripten::val Vjs, emscripten::val Fjs,
     r.F[3 * i + 2] = g_cage->F[i][2];
   }
   r.numFreeze = g_cage->ref.aabb ? g_cage->ref.aabb->num_freeze : 0;
+
+  r.thickness.resize(nVOut);
+  for (size_t i = 0; i < nVOut; ++i) {
+    Vec3d delta = g_cage->top[i] - g_cage->base[i];
+    r.thickness[i] = std::sqrt(delta.dot(delta));
+  }
   return r;
 }
 
@@ -182,7 +191,8 @@ EMSCRIPTEN_BINDINGS(prism_full_wasm) {
       .field("baseV", &prism_wasm::ShellResult::baseV)
       .field("topV", &prism_wasm::ShellResult::topV)
       .field("F", &prism_wasm::ShellResult::F)
-      .field("numFreeze", &prism_wasm::ShellResult::numFreeze);
+      .field("numFreeze", &prism_wasm::ShellResult::numFreeze)
+      .field("thickness", &prism_wasm::ShellResult::thickness);
 
   value_object<prism_wasm::ProjectionResult>("ProjectionResult")
       .field("faceId", &prism_wasm::ProjectionResult::faceId)
