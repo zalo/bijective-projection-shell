@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Bijective Projection Shell — WASM demo</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #101418; color: #e8eef5;
+      font-family: ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+    #app { position: absolute; inset: 0; }
+    #panel { position: absolute; top: 12px; left: 12px; background: rgba(20,26,32,.78);
+      backdrop-filter: blur(6px); padding: 14px 16px; border-radius: 10px;
+      border: 1px solid #2a3540; max-width: 360px; line-height: 1.45; font-size: 13px; z-index: 10; }
+    #panel h1 { margin: 0 0 6px; font-size: 14px; letter-spacing: .02em; }
+    #panel small { color: #93a3b3; }
+    label { display: block; margin: 8px 0 2px; }
+    input[type=range] { width: 100%; }
+    select, button { background:#1a2229; color:#e8eef5; border:1px solid #2c3742;
+      padding:4px 8px; border-radius:6px; font: inherit; }
+    button { cursor: pointer; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+    .stat { color:#a8c5e0; }
+    .legend { display:grid; grid-template-columns:14px 1fr; gap:6px 8px; align-items:center; margin-top:8px; }
+    .swatch { width:14px; height:14px; border-radius:3px; }
+    .err { color: #ff8080; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="panel">
+    <h1>Bijective Projection Shell <small>— WASM demo</small></h1>
+    <small>
+      Real <code>PrismCage</code> construction (SIGGRAPH Asia 2020) compiled to
+      WASM. CGAL, geogram, embree, HDF5, and TBB have been replaced with
+      Shewchuk's robust predicates, libigl AABB, and the in-source spatial-hash
+      self-intersection module. Bijective Phong projection is run on each
+      query point lying inside the prismatic shell.
+    </small>
+
+    <label>Geometry
+      <select id="geom">
+        <optgroup label="three.js parametric">
+          <option value="torusKnot" selected>Torus knot (2,3)</option>
+          <option value="torusKnot32">Torus knot (3,2)</option>
+          <option value="torusKnot37">Torus knot (3,7)</option>
+          <option value="torus">Torus</option>
+          <option value="sphere">Sphere</option>
+          <option value="bunnyish">Lumpy sphere</option>
+          <option value="dodecahedron">Dodecahedron</option>
+          <option value="octahedron">Octahedron</option>
+          <option value="capsule">Capsule</option>
+          <option value="lathe">Lathe (vase)</option>
+        </optgroup>
+        <optgroup label="manifold-3d CSG">
+          <option value="csg-drilled-cube">Cube − sphere (drilled cube)</option>
+          <option value="csg-rounded-cube">Cube ∩ sphere (rounded cube)</option>
+          <option value="csg-snowman">Sphere ∪ sphere (snowman)</option>
+          <option value="csg-drilled-torus">Torus − cylinder (drilled torus)</option>
+          <option value="csg-knurl">Cube − N-cylinders (knurl)</option>
+        </optgroup>
+      </select>
+    </label>
+
+    <label>Shell thickness <span id="thickVal" class="stat"></span>
+      <input id="thick" type="range" min="0.02" max="0.4" step="0.005" value="0.15" />
+    </label>
+
+    <label>Query points (#) <span id="nqVal" class="stat"></span>
+      <input id="nq" type="range" min="50" max="2000" step="50" value="600" />
+    </label>
+
+    <div class="row" style="margin-top:8px">
+      <label style="margin:0"><input type="checkbox" id="showShell" checked> shell</label>
+      <label style="margin:0"><input type="checkbox" id="showSurface" checked> surface</label>
+      <label style="margin:0"><input type="checkbox" id="showQueries" checked> queries</label>
+      <label style="margin:0"><input type="checkbox" id="showLines" checked> projection lines</label>
+      <button id="reseed">re-sample</button>
+    </div>
+
+    <div class="legend">
+      <div class="swatch" style="background:#7aa9ff"></div><div>Original surface (mid)</div>
+      <div class="swatch" style="background:#3a4a5a"></div><div>Shell (base + top)</div>
+      <div class="swatch" style="background:#ffc04d"></div><div>Query points (in shell)</div>
+      <div class="swatch" style="background:#5be0a4"></div><div>Projected images</div>
+      <div class="swatch" style="background:#a78bfa"></div><div>q → π(q)</div>
+    </div>
+
+    <div id="status" class="stat" style="margin-top:8px">loading WASM…</div>
+    <div id="error" class="err"></div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="./demo.js"></script>
+</body>
+</html>

@@ -7,7 +7,9 @@
 #include <spdlog/fmt/ostr.h>
 #include <spdlog/spdlog.h>
 
+#ifndef PRISM_NO_HDF5
 #include <highfive/H5Easy.hpp>
+#endif
 #include <limits>
 #include <prism/predicates/inside_octahedron.hpp>
 #include <prism/predicates/triangle_triangle_intersection.hpp>

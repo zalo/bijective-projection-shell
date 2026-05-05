@@ -14,7 +14,9 @@
 #include <spdlog/spdlog.h>
 
 #include <filesystem>
+#ifndef PRISM_NO_HDF5
 #include <highfive/H5Easy.hpp>
+#endif
 #include <prism/geogram/geogram_utils.hpp>
 #include <prism/local_operations/validity_checks.hpp>
 #include <stdexcept>
@@ -166,6 +168,12 @@ auto deserialize_meta_edges = [](auto &flat, auto &ind) {
 };
 
 void PrismCage::serialize(std::string filename, std::any additionals) {
+#ifdef PRISM_NO_HDF5
+  spdlog::warn("PrismCage::serialize is a no-op in this build (PRISM_NO_HDF5).");
+  (void)filename;
+  (void)additionals;
+  return;
+#else
   RowMatd mbase, mtop, mV;
   RowMati mF;
   vec2eigen(base, mbase);
@@ -208,9 +216,15 @@ void PrismCage::serialize(std::string filename, std::any additionals) {
 
   if (additionals.has_value())
     std::any_cast<std::function<void(decltype(file) &)>>(additionals)(file);
+#endif
 }
 
 void PrismCage::load_from_hdf5(std::string filename) {
+#ifdef PRISM_NO_HDF5
+  (void)filename;
+  throw std::runtime_error(
+      "PrismCage::load_from_hdf5 is unavailable in this build (PRISM_NO_HDF5).");
+#else
   H5Easy::File file(filename, H5Easy::File::ReadOnly);
   RowMatd mbase, mtop, mV;
   RowMati mF;
@@ -271,6 +285,7 @@ void PrismCage::load_from_hdf5(std::string filename) {
     track_ref.emplace_back(cur_track);
     cur += ts;
   }
+#endif
 }
 
 PrismCage::PrismCage(std::string filename) {

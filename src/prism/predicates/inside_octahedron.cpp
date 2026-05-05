@@ -1,15 +1,15 @@
 #include "inside_octahedron.hpp"
 
-#include <geogram/numerics/predicates.h>
 #include <spdlog/fmt/bundled/ranges.h>
 #include <spdlog/fmt/ostr.h>
 #include <spdlog/spdlog.h>
 
+#include "orient_robust.hpp"
 #include "prism/predicates/triangle_triangle_intersection.hpp"
 bool prism::inside_convex_octahedron(const std::array<Vec3d, 3>& base,
                                      const std::array<Vec3d, 3>& top,
                                      const Vec3d& point) {
-  using GEO::PCK::orient_3d;
+  using prism::predicates::orient_3d;
   auto q = point.data();
   if (orient_3d(top[0].data(), top[1].data(), top[2].data(), q) >
           0 ||  // above top
@@ -33,7 +33,7 @@ void prism::determine_convex_octahedron(const std::array<Vec3d, 3>& base,
                                         const std::array<Vec3d, 3>& top,
                                         std::array<bool, 3>& oct_type,
                                         bool degenerate) {
-  using GEO::PCK::orient_3d;
+  using prism::predicates::orient_3d;
   if (degenerate) {
     oct_type[0] = true;
     oct_type[2] = true;
@@ -49,7 +49,6 @@ void prism::determine_convex_octahedron(const std::array<Vec3d, 3>& base,
     // true: check b1-t0
   }
 }
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <spdlog/spdlog.h>
 
 std::vector<Vec3i> oct_faces_from_type(const std::array<bool, 3>& oct_type,
@@ -94,7 +93,7 @@ bool prism::triangle_intersect_octahedron(const std::array<Vec3d, 3>& base,
   for (int i = 0; i < 3; i++) {  // for each point of tri
     bool point_inside = true;
     for (auto& j : oct_faces) {  // if outside any face, the point is out.
-      if (GEO::PCK::orient_3d(vecprism[j[0]].data(), vecprism[j[1]].data(),
+      if (prism::predicates::orient_3d(vecprism[j[0]].data(), vecprism[j[1]].data(),
                               vecprism[j[2]].data(),
                               vectriangle[i].data()) > 0) {  // i outside face j
         point_inside = false;
@@ -120,26 +119,23 @@ bool prism::triangle_intersect_octahedron(const std::array<Vec3d, 3>& base,
 bool prism::singularless_triangle_intersect_octahedron(
     const std::array<Vec3d, 3>& base, const std::array<Vec3d, 3>& top,
     const std::array<bool, 3>& oct_type, const std::array<Vec3d, 3>& tri) {
-  // will ignore 0 vs. 0
-  // Triangle ABC, Pyramid AMN-APQ
-  typedef ::CGAL::Exact_predicates_inexact_constructions_kernel K;
+  // Triangle ABC vs. Pyramid AMN-APQ; vertex A is shared and ignored.
+  // CGAL-free reimplementation using prism::predicates::*.
   auto oct_faces = oct_faces_from_type(oct_type, true);
-  std::array<K::Point_3, 6> prism;
-  std::array<K::Point_3, 3> triangle;
+  std::array<Vec3d, 6> vecprism;
   for (int i = 0; i < 3; i++) {
-    triangle[i] = K::Point_3(tri[i][0], tri[i][1], tri[i][2]);
-    prism[i] = K::Point_3(base[i][0], base[i][1], base[i][2]);
-    prism[i + 3] = K::Point_3(top[i][0], top[i][1], top[i][2]);
+    vecprism[i] = base[i];
+    vecprism[i + 3] = top[i];
   }
+  const auto& vectriangle = tri;
 
-  // Step 1. Test Segment BC vs. Pyramid.
-  // Step 1.a B or C inside Pyramid
+  // Step 1.a: B or C inside the pyramid (strictly outside all faces -> not in)
   for (int i = 1; i < 3; i++) {
     bool point_inside = true;
     for (auto& j : oct_faces) {
-      if (CGAL::orientation(prism[j[0]], prism[j[1]], prism[j[2]],
-                            triangle[i]) ==
-          CGAL::POSITIVE) {  // i outside face j
+      if (prism::predicates::orient_3d(
+              vecprism[j[0]].data(), vecprism[j[1]].data(),
+              vecprism[j[2]].data(), vectriangle[i].data()) > 0) {
         point_inside = false;
         break;
       }
@@ -147,30 +143,29 @@ bool prism::singularless_triangle_intersect_octahedron(
     if (point_inside) {
       spdlog::trace("Point In {}", i);
       return true;
-    }  // B/C point inside or on
+    }
   }
-  // Step 1.b Segment BC intersect faces of pyramid.
-  K::Segment_3 BC(triangle[1], triangle[2]);
-  for (auto& j : oct_faces) {  // any face is intersecting
-    K::Triangle_3 facet(prism[j[0]], prism[j[1]], prism[j[2]]);
-    if (CGAL::do_intersect(facet, BC)) {
-      spdlog::trace("BC intersect BC");
+
+  // Step 1.b: segment BC vs. each pyramid face.
+  std::array<Vec3d, 2> BC{vectriangle[1], vectriangle[2]};
+  for (auto& j : oct_faces) {
+    std::array<Vec3d, 3> facet{vecprism[j[0]], vecprism[j[1]], vecprism[j[2]]};
+    if (prism::predicates::segment_triangle_overlap(BC, facet)) {
+      spdlog::trace("BC intersects pyramid face");
       return true;
     }
   }
 
-  // Step 2. ABC against pyramid base [oct_faces[3,4]]
-  K::Triangle_3 ctri = K::Triangle_3(triangle[0], triangle[1], triangle[2]);
+  // Step 2: triangle ABC vs. pyramid base faces (oct_faces[3,4]).
   for (auto j : {3, 4}) {
-    K::Triangle_3 base(prism[oct_faces[j][0]], prism[oct_faces[j][1]],
-                       prism[oct_faces[j][2]]);
-    if (CGAL::do_intersect(base, ctri)) {
+    std::array<Vec3d, 3> base_facet{vecprism[oct_faces[j][0]],
+                                    vecprism[oct_faces[j][1]],
+                                    vecprism[oct_faces[j][2]]};
+    if (prism::predicates::triangle_triangle_overlap(vectriangle, base_facet)) {
       spdlog::trace("base intersect ctri {}", j);
-      spdlog::trace("oct_faces[{}], ", j);
       return true;
     }
   }
-  // Otherwise, not intersecting.
   return false;
 }
 
@@ -203,7 +198,7 @@ bool prism::pointless_triangle_intersect_octahedron(
   for (int i = 1; i < 3; i++) {
     bool point_inside = true;
     for (auto& j : oct_faces) {  // if outside any face, the point is out.
-      if (GEO::PCK::orient_3d(vecprism[j[0]].data(), vecprism[j[1]].data(),
+      if (prism::predicates::orient_3d(vecprism[j[0]].data(), vecprism[j[1]].data(),
                               vecprism[j[2]].data(),
                               vectriangle[i].data()) > 0) {  // i outside face j
         point_inside = false;

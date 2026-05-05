@@ -1,14 +1,13 @@
 #include "inside_prism_tetra.hpp"
 
-#include <geogram/numerics/predicates.h>
-
+#include "orient_robust.hpp"
 #include "prism/predicates/triangle_triangle_intersection.hpp"
 namespace prism::predicates {
 
 bool point_in_tetrahedron(const Vec3d& point, const Vec3d& T0, const Vec3d& T1,
                           const Vec3d& T2, const Vec3d& T3) {
   auto orient3D = [](const auto& a, const auto& b, const auto& c,
-                     const auto& d) { return GEO::PCK::orient_3d(a, b, c, d); };
+                     const auto& d) { return prism::predicates::orient_3d(a, b, c, d); };
   return orient3D(T0.data(), T3.data(), T1.data(), point.data()) >= 0 &&
          orient3D(T1.data(), T3.data(), T2.data(), point.data()) >= 0 &&
          orient3D(T0.data(), T1.data(), T2.data(), point.data()) >= 0 &&

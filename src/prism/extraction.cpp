@@ -11,7 +11,10 @@
 #include <spdlog/spdlog.h>
 
 #include <prism/PrismCage.hpp>
+#ifndef PRISM_NO_CGAL
 #include <prism/cgal/polyhedron_self_intersect.hpp>
+#endif
+#include <prism/spatial-hash/self_intersection.hpp>
 #include <prism/energy/smoother_pillar.hpp>
 #include <prism/local_operations/local_mesh_edit.hpp>
 #include <prism/local_operations/mesh_coloring.hpp>
@@ -42,7 +45,23 @@ bool shell_shrinker(const RowMatd& mV, const RowMati& mF,
 
     spdlog::info("preparing shell intersect info...");
     count_true(mask);
+#ifdef PRISM_NO_CGAL
+    {
+      std::vector<Vec3d> bv(mV.rows()), tv(curV.rows());
+      std::vector<Vec3i> Fv(mF.rows());
+      for (int i = 0; i < mV.rows(); ++i) bv[i] = mV.row(i);
+      for (int i = 0; i < curV.rows(); ++i) tv[i] = curV.row(i);
+      for (int i = 0; i < mF.rows(); ++i)
+        Fv[i] = {mF(i, 0), mF(i, 1), mF(i, 2)};
+      auto pairs_set = prism::spatial_hash::tetrashell_self_intersections(bv, tv, Fv);
+      ff_pairs.clear();
+      for (auto& [a, b] : pairs_set) {
+        if (mask[a] || mask[b]) ff_pairs.emplace_back(a, b);
+      }
+    }
+#else
     prism::cgal::tetrashell_self_intersect(mV, curV, mF, mask, ff_pairs);
+#endif
     spdlog::info("offending pairs {}", ff_pairs.size());
 
     if (ff_pairs.size() == 0) break;

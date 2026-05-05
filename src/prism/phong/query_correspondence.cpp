@@ -1,6 +1,8 @@
 #include "query_correspondence.hpp"
 
+#ifndef PRISM_NO_CGAL
 #include <geogram/mesh/mesh_AABB.h>
+#endif
 #include <igl/exact_geodesic.h>
 #include <igl/heat_geodesics.h>
 #include <igl/read_triangle_mesh.h>
@@ -11,7 +13,9 @@
 #include <spdlog/fmt/ostr.h>
 #include <spdlog/spdlog.h>
 
+#ifndef PRISM_NO_HDF5
 #include <highfive/H5Easy.hpp>
+#endif
 #include <prism/cage_utils.hpp>
 #include <prism/common.hpp>
 #include <prism/geogram/geogram_utils.hpp>
@@ -58,6 +62,12 @@ bool prism::project_to_proxy_mesh(const std::array<Vec3d, 9> &stack,
 void prism::correspond_bc(const PrismCage &pc, const RowMatd &pxV,
                           const RowMati &pxF, const RowMatd &queryP,
                           Eigen::VectorXi &queryF, RowMatd &queryUV) {
+#ifdef PRISM_NO_CGAL
+  spdlog::error("prism::correspond_bc requires geogram MeshCellsAABB; not available in PRISM_WASM build.");
+  queryF.setConstant(queryP.rows(), -1);
+  queryUV.setZero(queryP.rows(), 2);
+  return;
+#else
   prism::geogram::AABB pxtree(pxV, pxF);
   GEO::Mesh geo_tet;
   std::unique_ptr<GEO::MeshCellsAABB> tetaabb;
@@ -100,6 +110,7 @@ void prism::correspond_bc(const PrismCage &pc, const RowMatd &pxV,
     queryF[i] = hit.id;
     queryUV.row(i) << hit.u, hit.v;
   }
+#endif
 }
 
 bool prism::project_to_ref_mesh(

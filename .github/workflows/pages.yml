@@ -1,0 +1,76 @@
+name: Build and deploy demo to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build WASM and stage web/
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential ninja-build
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.64
+          actions-cache-folder: emsdk-cache
+
+      - name: Cache CMake build_wasm
+        uses: actions/cache@v4
+        with:
+          path: build_wasm
+          key: ${{ runner.os }}-build_wasm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'wasm/**', 'src/**') }}
+          restore-keys: |
+            ${{ runner.os }}-build_wasm-
+
+      - name: Configure (emcmake)
+        run: |
+          mkdir -p build_wasm
+          cd build_wasm
+          emcmake cmake -DCMAKE_BUILD_TYPE=Release -DPRISM_WASM=ON -DPRISM_TESTS=OFF ..
+
+      - name: Build prism_full_wasm
+        run: |
+          cd build_wasm
+          emmake make prism_full_wasm -j$(nproc)
+
+      - name: Stage web/ for Pages
+        run: |
+          cp build_wasm/prism_full_wasm.js  web/
+          cp build_wasm/prism_full_wasm.wasm web/
+          # Pages serves the directory root; web/index.html will be at /.
+          ls -la web/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

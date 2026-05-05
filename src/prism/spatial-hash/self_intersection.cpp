@@ -10,7 +10,9 @@
 #include "prism/predicates/tetrahedron_overlap.hpp"
 #include "prism/local_operations/retain_triangle_adjacency.hpp"
 #include "prism/predicates/triangle_triangle_intersection.hpp"
+#ifndef PRISM_NO_HDF5
 #include <highfive/H5Easy.hpp>
+#endif
 
 
 constexpr auto share_vertex = [](const auto &f0, auto &f1, int &s0, int &s1) {

@@ -1,6 +1,6 @@
 #include "tetrahedron_overlap.hpp"
 
-#include <geogram/numerics/predicates.h>
+#include "orient_robust.hpp"
 
 #include "inside_octahedron.hpp"
 #include "inside_prism_tetra.hpp"
@@ -8,10 +8,10 @@
 
 bool prism::predicates::tetrahedron_tetrahedron_overlap(
     const std::array<Vec3d, 4>& Atet, const std::array<Vec3d, 4>& Btet) {
-  if (GEO::PCK::orient_3d(Atet[0].data(), Atet[1].data(), Atet[2].data(),
+  if (prism::predicates::orient_3d(Atet[0].data(), Atet[1].data(), Atet[2].data(),
                           Atet[3].data()) == 0)
     return false;
-  if (GEO::PCK::orient_3d(Btet[0].data(), Btet[1].data(), Btet[2].data(),
+  if (prism::predicates::orient_3d(Btet[0].data(), Btet[1].data(), Btet[2].data(),
                           Btet[3].data()) == 0)
     return false;
   for (int i = 0; i < 4; i++) {

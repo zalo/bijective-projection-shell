@@ -192,18 +192,18 @@ inline void put_in_unit_box(RowMatd& V) {
   V /= V.maxCoeff();
 }
 
-auto non_empty_intersect = [](auto& A, auto& B) {
+inline auto non_empty_intersect = [](auto& A, auto& B) {
   std::vector<int> vec;
   std::set_intersection(A.begin(), A.end(), B.begin(), B.end(),
                         std::back_inserter(vec));
   return !vec.empty();
 };
 
-auto set_minus = [](const auto& A, const auto& B, auto& C) {
+inline auto set_minus = [](const auto& A, const auto& B, auto& C) {
   std::set_difference(A.begin(), A.end(), B.begin(), B.end(),
                       std::inserter(C, C.begin()));
 };
-auto set_add_to = [](const auto& A, auto& B) {
+inline auto set_add_to = [](const auto& A, auto& B) {
   std::merge(A.begin(), A.end(), B.begin(), B.end(),
              std::inserter(B, B.begin()));
 };

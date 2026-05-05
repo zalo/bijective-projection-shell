@@ -38,10 +38,10 @@
 #include "triangle_triangle_intersection.hpp"
 typedef double real;  // double
 
-#include <geogram/numerics/predicates.h>
+#include "orient_robust.hpp"
 inline int sub_sub_cross_sub_dot(const real pa[3], const real pb[3],
                                  const real pc[3], const real pd[3]) {
-  auto result = -GEO::PCK::orient_3d(pa, pb, pc, pd);
+  auto result = -prism::predicates::orient_3d(pa, pb, pc, pd);
   if (result > 0)
     return 1;
   else if (result < 0)
@@ -50,7 +50,7 @@ inline int sub_sub_cross_sub_dot(const real pa[3], const real pb[3],
 }
 
 inline int orient2d(const real a[3], const real b[3], const real c[3]) {
-  auto result = GEO::PCK::orient_2d(a, b, c);
+  auto result = prism::predicates::orient_2d(a, b, c);
   // auto numer = ((a[0]-c[0])*(b[1]-c[1])-(a[1]-c[1])*(b[0]-c[0]));
   // if (result >0) assert(numer>0);
   if (result > 0)
@@ -509,8 +509,8 @@ bool seg_seg_overlap(const std::tuple<Vec2d &, Vec2d &> &seg0,
   Scalar y3 = p3[1];
   Scalar x4 = p4[0];
   Scalar y4 = p4[1];
-  auto d123 = GEO::PCK::orient_2d(p1.data(), p2.data(), p3.data());
-  auto d124 = GEO::PCK::orient_2d(p1.data(), p2.data(), p4.data());
+  auto d123 = prism::predicates::orient_2d(p1.data(), p2.data(), p3.data());
+  auto d124 = prism::predicates::orient_2d(p1.data(), p2.data(), p4.data());
   if (d123 == 0) {
     if (d124 == 0) {
     } else {  // if 3 is between 1,2
@@ -540,7 +540,7 @@ bool seg_seg_overlap(const std::tuple<Vec2d &, Vec2d &> &seg0,
 // };
 
 constexpr auto o2 = [](const auto &t1, const auto &t2, const auto &t3) -> int {
-    return GEO::PCK::orient_2d(t1.data(), t2.data(), t3.data());
+    return prism::predicates::orient_2d(t1.data(), t2.data(), t3.data());
   };
 bool seg_tri_overlap(const std::tuple<Vec2d &, Vec2d &> &seg,
                      const std::tuple<Vec2d &, Vec2d &, Vec2d &> &tri) {
@@ -608,8 +608,8 @@ bool prism::predicates::segment_triangle_overlap(
   using coplanar::to2d;
   auto &[p, q] = seg;
   auto &[a, b, c] = tri;
-  GEO::Sign abcp = GEO::PCK::orient_3d(a.data(), b.data(), c.data(), p.data());
-  GEO::Sign abcq = GEO::PCK::orient_3d(a.data(), b.data(), c.data(), q.data());
+  int abcp = prism::predicates::orient_3d(a.data(), b.data(), c.data(), p.data());
+  int abcq = prism::predicates::orient_3d(a.data(), b.data(), c.data(), q.data());
   if (abcp == 0) {  // project to 2d
     auto t = coplanar::get_axis(a, b, c);
     if (abcq == 0) {
@@ -630,11 +630,11 @@ bool prism::predicates::segment_triangle_overlap(
   }
   if (abcp == abcq) 
     return false;  // both nonzero, on the same side
-  GEO::Sign s1 = GEO::PCK::orient_3d(p.data(), q.data(), a.data(), b.data());
-  GEO::Sign s2 = GEO::PCK::orient_3d(p.data(), q.data(), b.data(), c.data());
+  int s1 = prism::predicates::orient_3d(p.data(), q.data(), a.data(), b.data());
+  int s2 = prism::predicates::orient_3d(p.data(), q.data(), b.data(), c.data());
   if (s1!=0 && s2!= 0 && s1 != s2) 
     return false;
-  GEO::Sign s3 = GEO::PCK::orient_3d(p.data(), q.data(), c.data(), a.data());
+  int s3 = prism::predicates::orient_3d(p.data(), q.data(), c.data(), a.data());
   if (s1 > 0 || s2 > 0 || s3 > 0) {
     if (s1 < 0 || s2 < 0 || s3 < 0) return false; // if there is a + - pair, then not intersecting
   }

@@ -1,6 +1,8 @@
 #include "AABB_hash.hpp"
 
+#ifndef PRISM_NO_CGAL
 #include <geogram/basic/geometry.h>
+#endif
 #include <igl/avg_edge_length.h>
 #include <spdlog/spdlog.h>
 #include <numeric>

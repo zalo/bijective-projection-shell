@@ -4,7 +4,9 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#ifndef PRISM_NO_HDF5
 #include <highfive/H5Easy.hpp>
+#endif
 #include <queue>
 
 #include "local_mesh_edit.hpp"

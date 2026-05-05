@@ -1,5 +1,6 @@
 #ifndef PRISM_ENERGY_SMOOTHER_PILLAR_HPP
 #define PRISM_ENERGY_SMOOTHER_PILLAR_HPP
+#include <optional>
 #include <prism/common.hpp>
 
 namespace prism {

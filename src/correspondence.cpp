@@ -1,3 +1,7 @@
+// transfer_pipeline depends on geogram + HighFive — gated out of WASM builds.
+#ifdef PRISM_NO_HDF5
+void transfer_pipeline(const char*, const char*, int) {}
+#else
 #include <geogram/mesh/mesh_AABB.h>
 #include <igl/exact_geodesic.h>
 #include <igl/heat_geodesics.h>
@@ -33,3 +37,4 @@ void transfer_pipeline(std::string shellfile, std::string section_file,
   H5Easy::dump(file, "fid", qfid, H5Easy::DumpMode::Overwrite);
   H5Easy::dump(file, "qUV", quv, H5Easy::DumpMode::Overwrite);
 }
+#endif

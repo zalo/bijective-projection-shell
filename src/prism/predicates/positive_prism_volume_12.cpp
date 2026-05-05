@@ -1,11 +1,11 @@
 #include "positive_prism_volume_12.hpp"
 
-#include <geogram/numerics/predicates.h>
+#include "orient_robust.hpp"
 #include <Eigen/Dense>
 
 bool prism::predicates::positive_prism_volume(
     const std::array<Vec3d, 6> &verts) {
-  using GEO::PCK::orient_3d;
+  using prism::predicates::orient_3d;
   for (int i = 0; i < 12; i++) {
     if (orient_3d(verts[TWELVE_TETRAS[i][0]].data(),
                   verts[TWELVE_TETRAS[i][1]].data(),
@@ -19,7 +19,7 @@ bool prism::predicates::positive_prism_volume(
 bool prism::predicates::positive_prism_volume(
     const std::array<Vec3d, 6> &verts, const std::array<bool, 3> &constrained,
     bool numerical) {
-  using GEO::PCK::orient_3d;
+  using prism::predicates::orient_3d;
   for (int i = 0; i < 3; i++) {
     if (constrained[i])
       continue;

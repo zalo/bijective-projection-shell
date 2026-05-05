@@ -2,6 +2,7 @@
 #define PRISM_LOCAL_OPERATIONS_VALIDITY_CHECKS_HPP
 
 #include <any>
+#include <optional>
 
 #include "../common.hpp"
 #include "../geogram/AABB.hpp"

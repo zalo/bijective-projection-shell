@@ -23,7 +23,9 @@
 #include "prism/geogram/AABB.hpp"
 #include "prism/predicates/positive_prism_volume_12.hpp"
 #include "prism/spatial-hash/self_intersection.hpp"
+#ifndef PRISM_NO_CGAL
 #include "prism/cgal/polyhedron_self_intersect.hpp"
+#endif
 
 extern "C" {
 size_t getPeakRSS();
@@ -267,7 +269,18 @@ void shell_pipeline(std::string filename, std::string ser_file,
     vec2eigen(pc->base, mB);
     vec2eigen(pc->F, F);
 
-    if (prism::cgal::polyhedron_self_intersect(mT, F)) {
+    auto check_self_intersect = [](const RowMatd& V, const RowMati& F) {
+#ifdef PRISM_NO_CGAL
+      std::vector<Vec3d> Vv(V.rows());
+      std::vector<Vec3i> Fv(F.rows());
+      for (int i = 0; i < V.rows(); ++i) Vv[i] = V.row(i);
+      for (int i = 0; i < F.rows(); ++i) Fv[i] = {F(i, 0), F(i, 1), F(i, 2)};
+      return !prism::spatial_hash::self_intersections(Vv, Fv).empty();
+#else
+      return prism::cgal::polyhedron_self_intersect(V, F);
+#endif
+    };
+    if (check_self_intersect(mT, F)) {
       spdlog::warn("top {} self intersects", filename);
       prism::shell_extraction(*pc, false);
     }
@@ -279,7 +292,7 @@ void shell_pipeline(std::string filename, std::string ser_file,
     }
     vec2eigen(pc->base, mB);
     vec2eigen(pc->F, F);
-    if (prism::cgal::polyhedron_self_intersect(mB, F)) {
+    if (check_self_intersect(mB, F)) {
       spdlog::warn("base {} self intersects", filename);
       prism::shell_extraction(*pc, true);
     }

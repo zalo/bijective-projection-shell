@@ -12,7 +12,9 @@
 #include "mesh_coloring.hpp"
 #include "prism/PrismCage.hpp"
 #include "prism/cage_utils.hpp"
+#ifndef PRISM_NO_CGAL
 #include "prism/cgal/triangle_triangle_intersection.hpp"
+#endif
 #include "prism/geogram/AABB.hpp"
 #include "prism/intersections.hpp"
 #include "prism/spatial-hash/AABB_hash.hpp"
@@ -196,8 +198,13 @@ void smooth_single(PrismCage &pc, int vid,
     std::array<Vec3d, 2> seg_query{s, t};
     for (auto f : total_trackee) {
       auto v0 = ref.F(f, 0), v1 = ref.F(f, 1), v2 = ref.F(f, 2);
+#ifdef PRISM_NO_CGAL
+      auto mid_intersect = prism::intersections::segment_triangle_intersection_inexact(
+          seg_query, {ref.V.row(v0), ref.V.row(v1), ref.V.row(v2)});
+#else
       auto mid_intersect = prism::cgal::segment_triangle_intersection(
           seg_query, {ref.V.row(v0), ref.V.row(v1), ref.V.row(v2)});
+#endif
       if (mid_intersect) return mid_intersect;
     }
     return {};
