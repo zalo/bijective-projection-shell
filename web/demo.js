@@ -312,7 +312,7 @@ function buildWireMesh(V, F, color, opacity = 0.35) {
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(F.buffer, F.byteOffset, F.length), 1));
   const mat = new THREE.MeshBasicMaterial({
-    color, wireframe: true, transparent: true, opacity,
+    color, wireframe: true, transparent: opacity < 1, opacity,
   });
   return new THREE.Mesh(geo, mat);
 }
@@ -437,8 +437,8 @@ async function rebuild() {
     root.add(buildSurfaceMesh(midV, Fout, 0x7aa9ff, 0.85));
   }
   if (showShell) {
-    root.add(buildWireMesh(baseV, Fout, 0x3a6a4a, 0.35));
-    root.add(buildWireMesh(topV, Fout, 0x6a3a4a, 0.35));
+    root.add(buildWireMesh(baseV, Fout, 0x22aa55, 1.0));
+    root.add(buildWireMesh(topV, Fout, 0xdd3344, 1.0));
   }
   if (showQueries) {
     root.add(buildPointCloud(Q, 0xffc04d, 0.020));
