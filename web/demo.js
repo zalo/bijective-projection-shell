@@ -389,6 +389,11 @@ async function rebuild() {
     ({ V, F } = indexAndDedupe(geom));
   }
 
+  // Normalise every input mesh to the same bbox half-extent so the slider
+  // (interpreted as an absolute extrusion distance by PrismCage) means the
+  // same thing regardless of the source primitive's natural scale.
+  centerAndScaleInPlace(V, 0.9);
+
   // 1. Build the *real* PrismCage. The slider drives `initial_step`, which
   //    is the absolute extrusion distance along vertex normals (the AABB
   //    tree retracts it per-vertex if it would self-intersect). The 3rd
