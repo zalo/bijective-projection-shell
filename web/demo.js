@@ -567,6 +567,38 @@ async function rebuild() {
     if (cRes.count <= 1e-4 * nVCur) break outer;
   }
 
+  // Polish loop: 20 trailing flip+smooth iterations (no collapse). This is
+  // where most of the thickness growth happens for already-uniform meshes,
+  // matching the second loop in construct_shell.cpp:191-200.
+  let prevMean = 0;
+  for (let i = 0; i < 20; i++) {
+    const fRes = Module.flipStep();
+    passTotals.flip_ms += fRes.ms;
+    const sRes = Module.smoothStep();
+    passTotals.smooth_ms += sRes.ms;
+
+    const s = Module.getShell();
+    midV = vecToFloat64(s.midV);
+    baseV = vecToFloat64(s.baseV);
+    topV = vecToFloat64(s.topV);
+    Fout = vecToInt32(s.F);
+    thicknessArr = vecToFloat64(s.thickness);
+    deleteVecs(s);
+    renderShell(midV, baseV, topV, Fout, thicknessArr, /*queries*/ null);
+    const meanT = thicknessArr.reduce((a, b) => a + b, 0) / thicknessArr.length;
+    setStatus(`${geomName} · polish ${i + 1}/20 · cage V=${midV.length / 3} · ` +
+              `mean thick=${meanT.toFixed(4)} · ` +
+              `pass=${(fRes.ms + sRes.ms).toFixed(0)} ms · ` +
+              `cum collapse=${passTotals.collapse_ms.toFixed(0)}ms ` +
+              `flip=${passTotals.flip_ms.toFixed(0)}ms ` +
+              `smooth=${passTotals.smooth_ms.toFixed(0)}ms`);
+    await new Promise(r => requestAnimationFrame(r));
+
+    // Plateau early-out: stop when the mean isn't improving by >1%.
+    if (i > 0 && meanT < prevMean * 1.01) break;
+    prevMean = meanT;
+  }
+
   // ---- Stage 3: project queries through the final shell. ----
   const Q = sampleQueriesInShell(baseV, midV, topV, Fout, nQ);
   let proj;
