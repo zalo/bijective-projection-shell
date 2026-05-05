@@ -77,7 +77,21 @@
       <label style="margin:0"><input type="checkbox" id="showSurface" checked> surface</label>
       <label style="margin:0"><input type="checkbox" id="showQueries" checked> queries</label>
       <label style="margin:0"><input type="checkbox" id="showLines" checked> projection lines</label>
+      <label style="margin:0"><input type="checkbox" id="showShellMap"> shell-map raymarch</label>
       <button id="reseed">re-sample</button>
+    </div>
+
+    <div class="row" style="margin-top:6px">
+      <label style="margin:0">pattern
+        <select id="smPattern">
+          <option value="0" selected>dots</option>
+          <option value="1">bricks</option>
+          <option value="2">checker</option>
+        </select>
+      </label>
+      <label style="margin:0">scale
+        <input id="smScale" type="range" min="2" max="32" step="1" value="8" style="width:90px">
+      </label>
     </div>
 
     <div class="legend">

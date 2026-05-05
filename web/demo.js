@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import PrismWASM from "./prism_full_wasm.js";
+import { createShellMappingMesh } from "./shellMapping.js";
 
 const statusEl = document.getElementById("status");
 const errorEl = document.getElementById("error");
@@ -401,6 +402,7 @@ function renderShell(midV, baseV, topV, Fout, thicknessArr, queries) {
   const showSurface = document.getElementById("showSurface").checked;
   const showLines = document.getElementById("showLines").checked;
   const showQueries = document.getElementById("showQueries").checked;
+  const showShellMap = document.getElementById("showShellMap").checked;
 
   if (showSurface) {
     root.add(buildSurfaceMesh(midV, Fout, 0x7aa9ff, 0.85, thicknessArr));
@@ -408,6 +410,20 @@ function renderShell(midV, baseV, topV, Fout, thicknessArr, queries) {
   if (showShell) {
     root.add(buildWireMesh(baseV, Fout, 0x22aa55, 1.0));
     root.add(buildWireMesh(topV, Fout, 0xdd3344, 1.0));
+  }
+  if (showShellMap) {
+    const Fbuf = new Int32Array(Fout);
+    const pattern = parseInt(document.getElementById("smPattern").value, 10);
+    const scale = parseFloat(document.getElementById("smScale").value);
+    // Render both slabs — base->mid and mid->top — so the entire shell volume
+    // is covered. With useUpperSlab=false we get the lower half; default true
+    // covers the upper half. Two meshes render together with alpha blending.
+    root.add(createShellMappingMesh(baseV, midV, topV, Fbuf, {
+      pattern, patternScale: scale, useUpperSlab: false,
+    }));
+    root.add(createShellMappingMesh(baseV, midV, topV, Fbuf, {
+      pattern, patternScale: scale, useUpperSlab: true,
+    }));
   }
   if (queries && showQueries) {
     const { Q, imgP, hit } = queries;
@@ -604,9 +620,11 @@ function bindUI() {
     document.getElementById("nqVal").textContent = ` (${e.target.value})`;
     scheduleRebuild();
   });
-  for (const id of ["showShell", "showSurface", "showLines", "showQueries"]) {
+  for (const id of ["showShell", "showSurface", "showLines", "showQueries",
+                    "showShellMap", "smPattern"]) {
     document.getElementById(id).addEventListener("change", rebuild);
   }
+  document.getElementById("smScale").addEventListener("input", rebuild);
   document.getElementById("reseed").addEventListener("click", rebuild);
 }
 
