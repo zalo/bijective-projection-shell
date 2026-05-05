@@ -14,7 +14,10 @@ const setStatus = (s) => (statusEl.textContent = s);
 const setError = (s) => (errorEl.textContent = s);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+// Pixel ratio of 1 keeps the raymarcher's per-fragment cost manageable on
+// high-DPI mobile displays. Costs a bit of crispness on desktop, but the
+// shader is by far the dominant cost.
+renderer.setPixelRatio(1);
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.getElementById("app").appendChild(renderer.domElement);
 
@@ -415,14 +418,12 @@ function renderShell(midV, baseV, topV, Fout, thicknessArr, queries) {
     const Fbuf = new Int32Array(Fout);
     const pattern = parseInt(document.getElementById("smPattern").value, 10);
     const scale = parseFloat(document.getElementById("smScale").value);
-    // Render both slabs — base->mid and mid->top — so the entire shell volume
-    // is covered. With useUpperSlab=false we get the lower half; default true
-    // covers the upper half. Two meshes render together with alpha blending.
+    const bump = parseFloat(document.getElementById("smBump").value);
+    // Heightmap raymarcher displaces from mid outward into the upper slab.
+    // One mesh suffices — the lower slab is covered by the regular surface
+    // / shell wireframe layers if the user wants them.
     root.add(createShellMappingMesh(baseV, midV, topV, Fbuf, {
-      pattern, patternScale: scale, useUpperSlab: false,
-    }));
-    root.add(createShellMappingMesh(baseV, midV, topV, Fbuf, {
-      pattern, patternScale: scale, useUpperSlab: true,
+      pattern, patternScale: scale, bumpHeight: bump,
     }));
   }
   if (queries && showQueries) {
@@ -657,6 +658,7 @@ function bindUI() {
     document.getElementById(id).addEventListener("change", rebuild);
   }
   document.getElementById("smScale").addEventListener("input", rebuild);
+  document.getElementById("smBump").addEventListener("input", rebuild);
   document.getElementById("reseed").addEventListener("click", rebuild);
 }
 

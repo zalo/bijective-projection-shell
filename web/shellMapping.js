@@ -1,28 +1,27 @@
-// Shell-mapping raymarcher for the bijective prismatic shell.
+// Shell-mapping heightmap raymarcher for the bijective prismatic shell.
 //
-// For each face of the shell, render the prism's outer boundary as 8
-// triangles. In the fragment shader, the world position of each fragment
-// is the ray's *entry* into the prism. We raymarch inward along the view
-// direction, decompose each sample's world position into canonical-prism
-// coordinates (u, v, t) via the same Phong projection the C++ code uses,
-// and look up a procedural 3D pattern at (u, v, t).
+// Renders the upper slab of each PrismCage face (mid → top) as the prism's
+// outer boundary. In the fragment shader, every fragment's world position is
+// the ray's entry into the prism. We raymarch *inward* along the view
+// direction, decompose each sample into canonical-prism coordinates
+// (u, v, t) via the same Phong projection as src/prism/phong/projection.cpp,
+// and at each step compare t against a procedural heightmap h(u, v).
 //
-// This is a port of Porumbescu et al. 2005 "Shell maps" using PrismCage's
-// triangulated-prism parametrisation. The bijection (u, v, t) <-> world
-// position is exact by construction, so the pattern follows the surface
-// curvature without distortion.
+// When t crosses below h(u, v), the ray has hit the displaced surface;
+// shade with a cheap lambert-from-central-differences normal and return.
+//
+// This is the classical Porumbescu et al. 2005 "shell maps" rendering
+// adapted to PrismCage's prismatic parametrisation. Because the (u, v, t)
+// bijection is exact, the heightmap follows surface curvature without
+// distortion.
 
 import * as THREE from "three";
 
-// Indices into the 6-corner array V = [base[a], base[b], base[c],
-// top[a], top[b], top[c]]. Triangles wind so the normal points outward.
+// 8 boundary triangles of the unit prism (winding outward).
 const PRISM_TRIS = [
-  // bottom (base) — outward = -t direction
-  [0, 2, 1],
-  // top — outward = +t direction
-  [3, 4, 5],
-  // 3 side rectangles, each split into 2 triangles
-  [0, 1, 4], [0, 4, 3],
+  [0, 2, 1],                                  // bottom (base/mid)
+  [3, 4, 5],                                  // top    (mid/top)
+  [0, 1, 4], [0, 4, 3],                       // 3 side rectangles
   [1, 2, 5], [1, 5, 4],
   [2, 0, 3], [2, 3, 5],
 ];
@@ -78,23 +77,20 @@ varying vec3 vC4;
 varying vec3 vC5;
 varying float vSplitWay;
 
-uniform float uPatternScale;       // tiles per canonical unit
-uniform float uPatternThickness;   // 0..1 fraction of cell occupied by content
-uniform int uPattern;              // 0 = dots, 1 = bricks, 2 = checker
-uniform float uStepSize;           // raymarch step size in world units
+uniform float uPatternScale;       // tiles per canonical (u, v) unit
+uniform float uBumpHeight;         // max h(u,v) value, 0..1
+uniform int uPattern;              // 0 hex, 1 bricks, 2 fbm
+uniform float uStepSize;           // raymarch step in world units
 uniform int uMaxSteps;
-uniform float uOpacity;
 uniform vec3 uTintLow;
 uniform vec3 uTintHigh;
+uniform vec3 uLightDir;            // world-space directional light
 
-// Geogram-convention orient_3d: positive iff (b-a, c-a, d-a) is right-handed.
 float orient3d(vec3 a, vec3 b, vec3 c, vec3 d) {
   return determinant(mat3(b - a, c - a, d - a));
 }
 
 bool point_in_tet(vec3 p, vec3 T0, vec3 T1, vec3 T2, vec3 T3) {
-  // Same four orient_3d checks as src/prism/predicates/inside_prism_tetra.cpp.
-  // Tolerance widened slightly for shader-precision safety.
   const float EPS = -1e-7;
   return orient3d(T0, T3, T1, p) >= EPS
       && orient3d(T1, T3, T2, p) >= EPS
@@ -113,8 +109,6 @@ vec4 baryTet(vec3 p, vec3 a, vec3 b, vec3 c, vec3 d) {
   ) / vol;
 }
 
-// Canonical unit prism coordinates of the 6 prism corners. Same as
-// CANONICAL_PRISM in src/prism/phong/projection.cpp.
 const vec3 CAN0 = vec3(0.0, 0.0, 0.0);
 const vec3 CAN1 = vec3(1.0, 0.0, 0.0);
 const vec3 CAN2 = vec3(0.0, 1.0, 0.0);
@@ -138,24 +132,23 @@ vec3 canonicalCorner(int i) {
          i == 4 ? CAN4 : CAN5;
 }
 
-// Decompose a world-space point inside the prism into canonical (u, v, t).
-// Returns -1 if the point is not inside any of the prism's three tets.
-//
-// Mirrors prism::phong::phong_projection in src/prism/phong/projection.cpp.
 bool decomposePrism(vec3 p, out vec3 uvt) {
   // TETRA_SPLIT_A = {{0,3,4,5}, {1,4,2,0}, {2,5,0,4}}
   // TETRA_SPLIT_B = {{0,3,4,5}, {1,4,5,0}, {2,5,0,1}}
-  ivec4 tetA[3];
-  tetA[0] = ivec4(0, 3, 4, 5);
-  tetA[1] = ivec4(1, 4, 2, 0);
-  tetA[2] = ivec4(2, 5, 0, 4);
-  ivec4 tetB[3];
-  tetB[0] = ivec4(0, 3, 4, 5);
-  tetB[1] = ivec4(1, 4, 5, 0);
-  tetB[2] = ivec4(2, 5, 0, 1);
+  ivec4 tetA0 = ivec4(0, 3, 4, 5);
+  ivec4 tetA1 = ivec4(1, 4, 2, 0);
+  ivec4 tetA2 = ivec4(2, 5, 0, 4);
+  ivec4 tetB0 = ivec4(0, 3, 4, 5);
+  ivec4 tetB1 = ivec4(1, 4, 5, 0);
+  ivec4 tetB2 = ivec4(2, 5, 0, 1);
 
   for (int i = 0; i < 3; ++i) {
-    ivec4 t = vSplitWay > 0.5 ? tetA[i] : tetB[i];
+    ivec4 t;
+    if (vSplitWay > 0.5) {
+      t = i == 0 ? tetA0 : (i == 1 ? tetA1 : tetA2);
+    } else {
+      t = i == 0 ? tetB0 : (i == 1 ? tetB1 : tetB2);
+    }
     vec3 T0 = corner(t.x), T1 = corner(t.y), T2 = corner(t.z), T3 = corner(t.w);
     if (point_in_tet(p, T0, T1, T2, T3)) {
       vec4 b = baryTet(p, T0, T1, T2, T3);
@@ -167,113 +160,138 @@ bool decomposePrism(vec3 p, out vec3 uvt) {
   return false;
 }
 
-// 3D pattern in canonical coordinates. Returns rgba: rgb is content colour,
-// a is its density at this point.
-vec4 sampleShellTexture(vec3 uvt) {
-  vec3 cell = fract(uvt * uPatternScale);
-  vec3 d = abs(cell - 0.5);
-  float r;
+// ---- 2D procedural heightfield h(u, v) ∈ [0, 1] ----
 
-  if (uPattern == 0) {
-    // Spheres on a regular grid.
-    r = length(d);
-    float density = smoothstep(uPatternThickness, uPatternThickness * 0.7, r);
-    vec3 col = mix(uTintLow, uTintHigh, smoothstep(0.0, 0.6, length(uvt - 0.5)));
-    return vec4(col, density);
-  } else if (uPattern == 1) {
-    // Stretcher-bond bricks: stagger every other v-row.
-    float row = floor(uvt.y * uPatternScale);
-    float u = uvt.x * uPatternScale + 0.5 * mod(row, 2.0);
-    vec3 b = vec3(fract(u), fract(uvt.y * uPatternScale), fract(uvt.z * uPatternScale));
-    vec3 ab = abs(b - 0.5);
-    // Outer "mortar" gap.
-    float mortar = step(0.5 - uPatternThickness * 0.05, max(ab.x, max(ab.y, ab.z)));
-    vec3 col = mix(uTintLow, uTintHigh, b.z);
-    return vec4(col, 1.0 - mortar);
-  } else {
-    // Tri-axial 3D checker.
-    vec3 ic = floor(uvt * uPatternScale);
-    float parity = mod(ic.x + ic.y + ic.z, 2.0);
-    vec3 col = mix(uTintLow, uTintHigh, parity);
-    // Soft cell boundaries via distance to nearest cell face.
-    float wall = smoothstep(0.5 - uPatternThickness * 0.5,
-                            0.5, max(d.x, max(d.y, d.z)));
-    return vec4(col, mix(0.6, 0.05, wall));
+float hash21(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i + vec2(0,0)), hash21(i + vec2(1,0)), u.x),
+             mix(hash21(i + vec2(0,1)), hash21(i + vec2(1,1)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; ++i) {
+    v += a * vnoise(p);
+    p *= 2.0;
+    a *= 0.5;
   }
+  return v;
+}
+
+// Hex bumps: rounded hexagons on a brick lattice.
+float hexBumps(vec2 uv) {
+  vec2 s = uv * vec2(uPatternScale * 1.732, uPatternScale);
+  vec2 h1 = vec2(s.x, s.y);
+  vec2 h2 = vec2(s.x + uPatternScale * 0.866, s.y + 0.5);
+  vec2 c1 = h1 - (floor(h1) + 0.5);
+  vec2 c2 = h2 - (floor(h2) + 0.5);
+  float d1 = length(c1);
+  float d2 = length(c2);
+  float d = min(d1, d2);
+  return smoothstep(0.5, 0.15, d);
+}
+
+// Stretcher-bond bricks with rounded shoulders.
+float brickBumps(vec2 uv) {
+  float row = floor(uv.y * uPatternScale);
+  vec2 b = vec2(uv.x * uPatternScale + 0.5 * mod(row, 2.0),
+                uv.y * uPatternScale);
+  vec2 c = abs(fract(b) - 0.5);
+  // Mortar gap: distance from cell edge.
+  float gap = 0.5 - max(c.x, c.y);
+  return smoothstep(0.0, 0.08, gap);
+}
+
+float heightmap(vec2 uv) {
+  float h;
+  if (uPattern == 0) h = hexBumps(uv);
+  else if (uPattern == 1) h = brickBumps(uv);
+  else h = fbm(uv * uPatternScale);
+  return h * uBumpHeight;
 }
 
 void main() {
-  // Ray entry: front-facing fragment world position. Direction: away from camera.
   vec3 ro = vWorldPos;
   vec3 rd = normalize(vWorldPos - cameraPosition);
 
-  vec4 acc = vec4(0.0);
-  float t = 0.0;
+  // Track the last known (u, v) so that if the ray exits the prism without
+  // crossing the bump surface, we can shade as the base mid surface (i.e.,
+  // the heightmap's "valley" floor) using the smoothest local lambertian
+  // approximation. This avoids holes through valleys in high-frequency
+  // patterns like FBM noise.
+  vec3 lastUvt = vec3(0.5, 0.5, 0.0);
+  bool everInside = false;
   for (int i = 0; i < 256; ++i) {
-    if (i >= uMaxSteps || acc.a > 0.97) break;
-    vec3 p = ro + rd * t;
+    if (i >= uMaxSteps) break;
+    vec3 p = ro + rd * (float(i) * uStepSize);
     vec3 uvt;
-    if (!decomposePrism(p, uvt)) {
-      // Stepped outside this prism's volume — done. (Rays that exit through
-      // a side face into a neighbouring prism aren't continued; we'd need a
-      // neighbour-link table for that, which adds complexity for limited
-      // visual improvement at this pattern density.)
-      break;
+    if (!decomposePrism(p, uvt)) break;
+    everInside = true;
+    lastUvt = uvt;
+
+    float h = heightmap(uvt.xy);
+    if (uvt.z <= h) {
+      const float dx = 0.005;
+      float hu = heightmap(uvt.xy + vec2(dx, 0.0));
+      float hv = heightmap(uvt.xy + vec2(0.0, dx));
+      vec3 n_canon = normalize(vec3(-(hu - h) / dx, -(hv - h) / dx, 1.0));
+      vec3 up = normalize(vC3 - vC0);
+      vec3 du = normalize(vC1 - vC0);
+      vec3 dv = normalize(vC2 - vC0);
+      vec3 n_world = normalize(n_canon.x * du + n_canon.y * dv + n_canon.z * up);
+
+      float diffuse = max(0.15, dot(n_world, normalize(uLightDir)));
+      vec3 col = mix(uTintLow, uTintHigh, smoothstep(0.0, 1.0, h / max(uBumpHeight, 1e-6)));
+      gl_FragColor = vec4(col * diffuse, 1.0);
+      return;
     }
-    vec4 s = sampleShellTexture(uvt);
-    s.a *= uOpacity;
-    acc.rgb += s.rgb * s.a * (1.0 - acc.a);
-    acc.a += s.a * (1.0 - acc.a);
-    t += uStepSize;
   }
 
-  if (acc.a < 0.01) discard;
-  gl_FragColor = vec4(acc.rgb / max(acc.a, 0.001), acc.a);
+  // Ray didn't hit the bump surface — shade as the smooth "valley floor"
+  // using the prism's pillar as a normal. Same colour ramp as h=0.
+  if (!everInside) discard;
+  vec3 up = normalize(vC3 - vC0);
+  float diffuse = max(0.15, dot(up, normalize(uLightDir)));
+  gl_FragColor = vec4(uTintLow * diffuse, 1.0);
 }
 `;
 
-// Build (V, F, splitWays) per-prism arrays the shader expects, and wire them
-// into an InstancedBufferGeometry + ShaderMaterial.
-//
-// midV / baseV / topV are Float64Array of length 3*N (PrismCage's per-vertex
-// arrays after construction). F is Int32Array of length 3*M (face indices
-// into the V arrays).
 export function createShellMappingMesh(baseV, midV, topV, F, options = {}) {
   const opts = Object.assign({
-    pattern: 0,            // 0 dots, 1 bricks, 2 checker
+    pattern: 0,            // 0 hex, 1 bricks, 2 fbm
     patternScale: 8.0,
-    patternThickness: 0.35,
-    stepSize: 0.004,
-    maxSteps: 64,
-    opacity: 0.6,
-    tintLow: new THREE.Color(0x4a8aff),
-    tintHigh: new THREE.Color(0xff8a4a),
-    useUpperSlab: true,    // mid->top by default; false picks base->mid
+    bumpHeight: 0.7,
+    stepSize: 0.005,
+    maxSteps: 96,
+    tintLow: new THREE.Color(0x2a4060),
+    tintHigh: new THREE.Color(0xffd28a),
+    lightDir: new THREE.Vector3(0.5, 0.7, 0.5),
   }, options);
 
   const numPrisms = F.length / 3;
 
-  // Per-vertex data for the unit prism boundary (shared across all instances).
   const vertsPerPrism = PRISM_TRIS.length * 3;
-  const positions = new Float32Array(vertsPerPrism * 3);  // dummy; real pos is computed in VS
+  const positions = new Float32Array(vertsPerPrism * 3);
   const cornerIdx = new Float32Array(vertsPerPrism);
   for (let i = 0; i < PRISM_TRIS.length; i++) {
     for (let j = 0; j < 3; j++) {
-      const idx = i * 3 + j;
-      cornerIdx[idx] = PRISM_TRIS[i][j];
+      cornerIdx[i * 3 + j] = PRISM_TRIS[i][j];
     }
   }
 
-  // Per-instance corner positions. We pick which slab to render: upper
-  // (mid -> top) or lower (base -> mid). The combined shell is two slabs,
-  // each with its own bijective parametrisation.
-  const c = [];  // c[k] is a Float32Array of length numPrisms*3 for corner k
+  const c = [];
   for (let k = 0; k < 6; k++) c.push(new Float32Array(numPrisms * 3));
   const splitWays = new Float32Array(numPrisms);
 
-  const lowV = opts.useUpperSlab ? midV : baseV;
-  const highV = opts.useUpperSlab ? topV : midV;
-
+  // Heightmap shell mapping renders the *upper* slab only (mid -> top), with
+  // bumps protruding from the surface (mid) outward. The lower slab is
+  // omitted; if you wanted two-sided displacement it would need its own
+  // pass with reversed t.
   for (let f = 0; f < numPrisms; f++) {
     const a = F[3 * f], b = F[3 * f + 1], cc = F[3 * f + 2];
     const slot = (k, v) => {
@@ -281,14 +299,14 @@ export function createShellMappingMesh(baseV, midV, topV, F, options = {}) {
       c[k][3 * f + 1] = v[1];
       c[k][3 * f + 2] = v[2];
     };
-    slot(0, [lowV[3*a], lowV[3*a+1], lowV[3*a+2]]);
-    slot(1, [lowV[3*b], lowV[3*b+1], lowV[3*b+2]]);
-    slot(2, [lowV[3*cc], lowV[3*cc+1], lowV[3*cc+2]]);
-    slot(3, [highV[3*a], highV[3*a+1], highV[3*a+2]]);
-    slot(4, [highV[3*b], highV[3*b+1], highV[3*b+2]]);
-    slot(5, [highV[3*cc], highV[3*cc+1], highV[3*cc+2]]);
-    // splitWay = (b > c) per src/prism/common.hpp::tetra_split_AorB.
-    // After cage canonicalisation a is the minimum, so this matches.
+    // mid -> corners 0..2 (canonical t = 0)
+    slot(0, [midV[3*a], midV[3*a+1], midV[3*a+2]]);
+    slot(1, [midV[3*b], midV[3*b+1], midV[3*b+2]]);
+    slot(2, [midV[3*cc], midV[3*cc+1], midV[3*cc+2]]);
+    // top -> corners 3..5 (canonical t = 1)
+    slot(3, [topV[3*a], topV[3*a+1], topV[3*a+2]]);
+    slot(4, [topV[3*b], topV[3*b+1], topV[3*b+2]]);
+    slot(5, [topV[3*cc], topV[3*cc+1], topV[3*cc+2]]);
     splitWays[f] = (b > cc) ? 1.0 : 0.0;
   }
 
@@ -304,7 +322,6 @@ export function createShellMappingMesh(baseV, midV, topV, F, options = {}) {
   geom.setAttribute("splitWay", new THREE.InstancedBufferAttribute(splitWays, 1));
   geom.instanceCount = numPrisms;
 
-  // Conservative bbox so three.js doesn't try to frustum-cull instances.
   let minX=Infinity, minY=Infinity, minZ=Infinity;
   let maxX=-Infinity, maxY=-Infinity, maxZ=-Infinity;
   for (let i = 0; i < midV.length; i += 3) {
@@ -323,19 +340,17 @@ export function createShellMappingMesh(baseV, midV, topV, F, options = {}) {
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uPatternScale: { value: opts.patternScale },
-      uPatternThickness: { value: opts.patternThickness },
+      uBumpHeight: { value: opts.bumpHeight },
       uPattern: { value: opts.pattern },
       uStepSize: { value: opts.stepSize },
       uMaxSteps: { value: opts.maxSteps },
-      uOpacity: { value: opts.opacity },
       uTintLow: { value: new THREE.Vector3(opts.tintLow.r, opts.tintLow.g, opts.tintLow.b) },
       uTintHigh: { value: new THREE.Vector3(opts.tintHigh.r, opts.tintHigh.g, opts.tintHigh.b) },
+      uLightDir: { value: opts.lightDir.clone() },
     },
     vertexShader: VERTEX_SHADER,
     fragmentShader: FRAGMENT_SHADER,
     side: THREE.FrontSide,
-    transparent: true,
-    depthWrite: false,
   });
 
   return new THREE.Mesh(geom, material);
