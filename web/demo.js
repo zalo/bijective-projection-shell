@@ -499,15 +499,16 @@ async function rebuild() {
   // grows it.
   renderShell(midV, baseV, topV, Fout, thicknessArr, /*queries*/ null);
 
+  // Stage 2: per-pass schedule. We call collapseStep / flipStep / smoothStep
+  // individually and re-render between each so the user sees the cage
+  // simplify (collapse) and inflate (smooth). Mirrors the schedule in
+  // src/construct_shell.cpp:remesh_schedule but exposes the per-pass
+  // boundaries to JS for progress tracking.
   const maxIters = parseInt(document.getElementById("growIters").value, 10);
   let iters = 0;
   let collapseTotal = 0;
-  let lastReport = performance.now();
-  for (iters = 0; iters < maxIters; iters++) {
-    const cc = Module.growShellOnce();
-    collapseTotal += cc;
-    // Pull the updated cage and redraw periodically so the user can watch it
-    // inflate. Yield to the render loop every iteration.
+  const passTotals = { collapse_ms: 0, flip_ms: 0, smooth_ms: 0 };
+  const refreshAfterPass = async (label, passInfo) => {
     const s = Module.getShell();
     midV = vecToFloat64(s.midV);
     baseV = vecToFloat64(s.baseV);
@@ -516,11 +517,38 @@ async function rebuild() {
     thicknessArr = vecToFloat64(s.thickness);
     deleteVecs(s);
     renderShell(midV, baseV, topV, Fout, thicknessArr, /*queries*/ null);
-    setStatus(`${geomName} · iter ${iters + 1}/${maxIters} · cage V=${midV.length / 3} · ` +
-              `mean thick=${(thicknessArr.reduce((a, b) => a + b, 0) / thicknessArr.length).toFixed(4)} · ` +
-              `last collapses=${cc}`);
+    const meanT = thicknessArr.reduce((a, b) => a + b, 0) / thicknessArr.length;
+    setStatus(`${geomName} · iter ${iters + 1}/${maxIters} ${label} · ` +
+              `cage V=${midV.length / 3} F=${Fout.length / 3} · ` +
+              `mean thick=${meanT.toFixed(4)} · ` +
+              `pass=${passInfo} · ` +
+              `cum collapse=${passTotals.collapse_ms.toFixed(0)}ms ` +
+              `flip=${passTotals.flip_ms.toFixed(0)}ms ` +
+              `smooth=${passTotals.smooth_ms.toFixed(0)}ms`);
     await new Promise(r => requestAnimationFrame(r));
-    if (cc <= 1e-4 * (midV.length / 3)) break;  // converged
+  };
+
+  outer: for (iters = 0; iters < maxIters; iters++) {
+    // 1) collapse
+    const cRes = Module.collapseStep();
+    passTotals.collapse_ms += cRes.ms;
+    collapseTotal += cRes.count;
+    await refreshAfterPass("collapse", `${cRes.count} collapses, ${cRes.ms.toFixed(0)} ms`);
+
+    // 2) flip + smooth, twice (matches construct_shell.cpp:172-178)
+    for (let j = 0; j < 2; j++) {
+      const fRes = Module.flipStep();
+      passTotals.flip_ms += fRes.ms;
+      await refreshAfterPass(`flip${j ? "₂" : "₁"}`, `${fRes.ms.toFixed(0)} ms`);
+      const sRes = Module.smoothStep();
+      passTotals.smooth_ms += sRes.ms;
+      await refreshAfterPass(`smooth${j ? "₂" : "₁"}`, `${sRes.ms.toFixed(0)} ms`);
+    }
+
+    // Convergence early-out: same rule as construct_shell.cpp:185 — break
+    // when the collapse pass found ≤ 0.01% of the cage's vertex count.
+    const nVCur = midV.length / 3;
+    if (cRes.count <= 1e-4 * nVCur) break outer;
   }
 
   // ---- Stage 3: project queries through the final shell. ----

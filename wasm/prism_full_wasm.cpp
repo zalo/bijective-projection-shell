@@ -9,6 +9,7 @@
 #include <emscripten/val.h>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -132,10 +133,45 @@ void setRemeshOptions(double targetThickness, double targetEdgeLength,
   g_options->split_improve_quality = true;
 }
 
+// Per-pass result: how long it took (ms) and a count (collapses for collapse,
+// −1 for passes that don't return a count).
+struct PassResult {
+  double ms = 0.0;
+  int count = -1;
+};
+
+PassResult collapseStep() {
+  PassResult r;
+  if (!g_cage || !g_options) return r;
+  auto t0 = std::chrono::steady_clock::now();
+  r.count = prism::local::wildcollapse_pass(*g_cage, *g_options);
+  r.ms = std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now() - t0).count();
+  return r;
+}
+
+PassResult flipStep() {
+  PassResult r;
+  if (!g_cage || !g_options) return r;
+  auto t0 = std::chrono::steady_clock::now();
+  prism::local::wildflip_pass(*g_cage, *g_options);
+  r.ms = std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now() - t0).count();
+  return r;
+}
+
+PassResult smoothStep() {
+  PassResult r;
+  if (!g_cage || !g_options) return r;
+  auto t0 = std::chrono::steady_clock::now();
+  prism::local::localsmooth_pass(*g_cage, *g_options);
+  r.ms = std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now() - t0).count();
+  return r;
+}
+
 // Run one schedule iteration: wildcollapse + 2x (wildflip + localsmooth).
-// JS calls this in a loop and re-reads the shell to display progress.
-// Returns the number of edge collapses performed (0 typically signals
-// convergence).
+// Kept as a coarse helper; JS prefers the per-pass entry points above.
 int growShellOnce() {
   if (!g_cage || !g_options) return -1;
   int collapse_count =
@@ -279,8 +315,15 @@ EMSCRIPTEN_BINDINGS(prism_full_wasm) {
   register_vector<double>("VectorDouble");
   register_vector<int>("VectorInt");
 
+  value_object<prism_wasm::PassResult>("PassResult")
+      .field("ms", &prism_wasm::PassResult::ms)
+      .field("count", &prism_wasm::PassResult::count);
+
   function("buildShell", &prism_wasm::buildShell);
   function("setRemeshOptions", &prism_wasm::setRemeshOptions);
+  function("collapseStep", &prism_wasm::collapseStep);
+  function("flipStep", &prism_wasm::flipStep);
+  function("smoothStep", &prism_wasm::smoothStep);
   function("growShellOnce", &prism_wasm::growShellOnce);
   function("polishShellOnce", &prism_wasm::polishShellOnce);
   function("getShell", &prism_wasm::getShell);
