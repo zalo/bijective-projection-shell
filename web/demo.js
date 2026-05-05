@@ -393,6 +393,36 @@ function deleteVecs(obj) {
   }
 }
 
+// Wipe `root` and add fresh primitives for the current shell snapshot. Called
+// after every iteration of remesh_schedule so the user sees the cage inflate.
+function renderShell(midV, baseV, topV, Fout, thicknessArr, queries) {
+  clearGroup(root);
+  const showShell = document.getElementById("showShell").checked;
+  const showSurface = document.getElementById("showSurface").checked;
+  const showLines = document.getElementById("showLines").checked;
+  const showQueries = document.getElementById("showQueries").checked;
+
+  if (showSurface) {
+    root.add(buildSurfaceMesh(midV, Fout, 0x7aa9ff, 0.85, thicknessArr));
+  }
+  if (showShell) {
+    root.add(buildWireMesh(baseV, Fout, 0x22aa55, 1.0));
+    root.add(buildWireMesh(topV, Fout, 0xdd3344, 1.0));
+  }
+  if (queries && showQueries) {
+    const { Q, imgP, hit } = queries;
+    root.add(buildPointCloud(Q, 0xffc04d, 0.020));
+    const imgFiltered = [];
+    for (let i = 0; i < hit.length; i++) {
+      if (hit[i]) imgFiltered.push(imgP[3 * i], imgP[3 * i + 1], imgP[3 * i + 2]);
+    }
+    root.add(buildPointCloud(imgFiltered, 0x5be0a4, 0.022));
+    if (showLines) {
+      root.add(buildLineSegments(Q, imgP, hit, 0xa78bfa));
+    }
+  }
+}
+
 async function rebuild() {
   if (!Module) return;
   const t0 = performance.now();
@@ -417,29 +447,28 @@ async function rebuild() {
   }
   window.__VF = { V, F };
 
-  // Normalise every input mesh to the same bbox half-extent so the slider
-  // (interpreted as an absolute extrusion distance by PrismCage) means the
-  // same thing regardless of the source primitive's natural scale.
+  // Normalise every input mesh to bbox half-extent 0.9 so the thickness
+  // slider always means the same thing regardless of source primitive scale.
   centerAndScaleInPlace(V, 0.9);
 
-  // 1. Build the *real* PrismCage. The slider drives `initial_step`, which
-  //    is the absolute extrusion distance along vertex normals (the AABB
-  //    tree retracts it per-vertex if it would self-intersect). The 3rd
-  //    arg is the Doo-Sabin bevel epsilon for singular vertices.
+  // ---- Stage 1: faithful-to-paper construction. ----
+  // PrismCage::PrismCage builds an initial cage with extrusion ~ initial_step
+  // (paper uses 1e-4 of unit bbox). The cage is uniformly thin at this point
+  // — thick shells are produced by Stage 2 (remesh_schedule).
+  const INIT_STEP = 1e-4;
+  const DOO_EPS = 0.2;
   let shell;
   try {
-    shell = Module.buildShell(Array.from(V), Array.from(F), 0.2, thickness);
+    shell = Module.buildShell(Array.from(V), Array.from(F), DOO_EPS, INIT_STEP);
   } catch (e) {
     setError("buildShell threw: " + (e?.message || e));
     return;
   }
-  window.__lastShell = shell;
-  const midV = vecToFloat64(shell.midV);
-  const baseV = vecToFloat64(shell.baseV);
-  const topV = vecToFloat64(shell.topV);
-  const Fout = vecToInt32(shell.F);
-  const thicknessArr = shell.thickness ? vecToFloat64(shell.thickness) : null;
-  console.log("shell keys:", Object.keys(shell), "thickness present:", !!shell.thickness, "size:", shell.thickness?.size?.());
+  let midV = vecToFloat64(shell.midV);
+  let baseV = vecToFloat64(shell.baseV);
+  let topV = vecToFloat64(shell.topV);
+  let Fout = vecToInt32(shell.F);
+  let thicknessArr = shell.thickness ? vecToFloat64(shell.thickness) : null;
   deleteVecs(shell);
 
   if (!Fout.length) {
@@ -447,7 +476,54 @@ async function rebuild() {
     return;
   }
 
-  // 2. Sample query points inside the shell and project them.
+  // ---- Stage 2: remesh_schedule grows the cage toward target thickness. ----
+  // Mirror src/construct_shell.cpp::remesh_schedule but cap iterations so the
+  // demo stays interactive. Re-render between steps so the user sees the
+  // shell inflate.
+  const targetEdge = (() => {
+    let lo = [Infinity, Infinity, Infinity];
+    let hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < V.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        if (V[i + k] < lo[k]) lo[k] = V[i + k];
+        if (V[i + k] > hi[k]) hi[k] = V[i + k];
+      }
+    }
+    const bb = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+    return bb * 0.2;  // breve_bin's default --edge ratio
+  })();
+
+  Module.setRemeshOptions(thickness, targetEdge, 0.1);
+
+  // First render: thin initial cage. Lets the user see Stage 1 before Stage 2
+  // grows it.
+  renderShell(midV, baseV, topV, Fout, thicknessArr, /*queries*/ null);
+
+  const maxIters = parseInt(document.getElementById("growIters").value, 10);
+  let iters = 0;
+  let collapseTotal = 0;
+  let lastReport = performance.now();
+  for (iters = 0; iters < maxIters; iters++) {
+    const cc = Module.growShellOnce();
+    collapseTotal += cc;
+    // Pull the updated cage and redraw periodically so the user can watch it
+    // inflate. Yield to the render loop every iteration.
+    const s = Module.getShell();
+    midV = vecToFloat64(s.midV);
+    baseV = vecToFloat64(s.baseV);
+    topV = vecToFloat64(s.topV);
+    Fout = vecToInt32(s.F);
+    thicknessArr = vecToFloat64(s.thickness);
+    deleteVecs(s);
+    renderShell(midV, baseV, topV, Fout, thicknessArr, /*queries*/ null);
+    setStatus(`${geomName} · iter ${iters + 1}/${maxIters} · cage V=${midV.length / 3} · ` +
+              `mean thick=${(thicknessArr.reduce((a, b) => a + b, 0) / thicknessArr.length).toFixed(4)} · ` +
+              `last collapses=${cc}`);
+    await new Promise(r => requestAnimationFrame(r));
+    if (cc <= 1e-4 * (midV.length / 3)) break;  // converged
+  }
+
+  // ---- Stage 3: project queries through the final shell. ----
   const Q = sampleQueriesInShell(baseV, midV, topV, Fout, nQ);
   let proj;
   try {
@@ -456,37 +532,12 @@ async function rebuild() {
     setError("projectPoints threw: " + (e?.message || e));
     return;
   }
-  const faceId = vecToInt32(proj.faceId);
-  const uvt = vecToFloat64(proj.uvt);
   const imgP = vecToFloat64(proj.imageP);
   const hit = vecToInt32(proj.hit);
   const stratum = vecToInt32(proj.stratum);
   deleteVecs(proj);
 
-  // 3. Visualise.
-  const showShell = document.getElementById("showShell").checked;
-  const showSurface = document.getElementById("showSurface").checked;
-  const showLines = document.getElementById("showLines").checked;
-  const showQueries = document.getElementById("showQueries").checked;
-
-  if (showSurface) {
-    root.add(buildSurfaceMesh(midV, Fout, 0x7aa9ff, 0.85, thicknessArr));
-  }
-  if (showShell) {
-    root.add(buildWireMesh(baseV, Fout, 0x22aa55, 1.0));
-    root.add(buildWireMesh(topV, Fout, 0xdd3344, 1.0));
-  }
-  if (showQueries) {
-    root.add(buildPointCloud(Q, 0xffc04d, 0.020));
-    const imgFiltered = [];
-    for (let i = 0; i < hit.length; i++) {
-      if (hit[i]) imgFiltered.push(imgP[3 * i], imgP[3 * i + 1], imgP[3 * i + 2]);
-    }
-    root.add(buildPointCloud(imgFiltered, 0x5be0a4, 0.022));
-    if (showLines) {
-      root.add(buildLineSegments(Q, imgP, hit, 0xa78bfa));
-    }
-  }
+  renderShell(midV, baseV, topV, Fout, thicknessArr, { Q, imgP, hit });
 
   const hits = hit.reduce((a, b) => a + b, 0);
   const lower = stratum.reduce((a, s) => a + (s === 0 ? 1 : 0), 0);
@@ -505,6 +556,7 @@ async function rebuild() {
   setStatus(
     `${geomName} · input V=${V.length / 3} F=${F.length / 3} · ` +
     `cage V=${midV.length / 3} F=${Fout.length / 3} · ` +
+    `iters=${iters} collapses=${collapseTotal} · ` +
     `queries=${nQ} hit=${hits} (lower=${lower}, upper=${upper}) · ` +
     `${dt.toFixed(0)} ms` + thickStats);
   setError("");
@@ -514,6 +566,10 @@ function bindUI() {
   document.getElementById("geom").addEventListener("change", rebuild);
   document.getElementById("thick").addEventListener("input", (e) => {
     document.getElementById("thickVal").textContent = ` (${(+e.target.value).toFixed(3)})`;
+    scheduleRebuild();
+  });
+  document.getElementById("growIters").addEventListener("input", (e) => {
+    document.getElementById("growVal").textContent = ` (${e.target.value})`;
     scheduleRebuild();
   });
   document.getElementById("nq").addEventListener("input", (e) => {
@@ -539,6 +595,8 @@ PrismWASM().then((mod) => {
   bindUI();
   document.getElementById("thickVal").textContent =
     ` (${(+document.getElementById("thick").value).toFixed(3)})`;
+  document.getElementById("growVal").textContent =
+    ` (${document.getElementById("growIters").value})`;
   document.getElementById("nqVal").textContent =
     ` (${document.getElementById("nq").value})`;
   rebuild();

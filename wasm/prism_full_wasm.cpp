@@ -15,7 +15,9 @@
 
 #include <prism/PrismCage.hpp>
 #include <prism/common.hpp>
+#include <prism/energy/prism_quality.hpp>
 #include <prism/geogram/AABB.hpp>
+#include <prism/local_operations/remesh_pass.hpp>
 #include <prism/phong/projection.hpp>
 #include <prism/predicates/inside_prism_tetra.hpp>
 #include <prism/spatial-hash/AABB_hash.hpp>
@@ -62,6 +64,7 @@ struct ProjectionResult {
 };
 
 static std::shared_ptr<PrismCage> g_cage;
+static std::shared_ptr<prism::local::RemeshOptions> g_options;
 
 // Build a PrismCage from (V, F). Returns the resulting base/mid/top/F arrays.
 // `thicknessRatio` -> doosabineps (target thickness as fraction of bbox).
@@ -102,6 +105,78 @@ ShellResult buildShell(emscripten::val Vjs, emscripten::val Fjs,
   }
   r.numFreeze = g_cage->ref.aabb ? g_cage->ref.aabb->num_freeze : 0;
 
+  r.thickness.resize(nVOut);
+  for (size_t i = 0; i < nVOut; ++i) {
+    Vec3d delta = g_cage->top[i] - g_cage->base[i];
+    r.thickness[i] = std::sqrt(delta.dot(delta));
+  }
+
+  // Reset RemeshOptions when (re)building. The edge length and thickness
+  // targets are reapplied by JS via setRemeshOptions before growShell calls.
+  g_options.reset();
+  return r;
+}
+
+// Configure remesh options used by growShell. Call once after buildShell.
+//   targetThickness   — how thick the cage should become (||top - base||)
+//   targetEdgeLength  — long-edge collapse / split target
+//   distortionBound   — quality bound (smaller = stricter; default 0.1 in lib)
+void setRemeshOptions(double targetThickness, double targetEdgeLength,
+                      double distortionBound) {
+  if (!g_cage) return;
+  g_options = std::make_shared<prism::local::RemeshOptions>(
+      g_cage->mid.size(), targetEdgeLength);
+  g_options->target_thickness = targetThickness;
+  g_options->distortion_bound = distortionBound;
+  g_options->parallel = false;  // WASM has no threads
+  g_options->split_improve_quality = true;
+}
+
+// Run one schedule iteration: wildcollapse + 2x (wildflip + localsmooth).
+// JS calls this in a loop and re-reads the shell to display progress.
+// Returns the number of edge collapses performed (0 typically signals
+// convergence).
+int growShellOnce() {
+  if (!g_cage || !g_options) return -1;
+  int collapse_count =
+      prism::local::wildcollapse_pass(*g_cage, *g_options);
+  for (int j = 0; j < 2; j++) {
+    prism::local::wildflip_pass(*g_cage, *g_options);
+    prism::local::localsmooth_pass(*g_cage, *g_options);
+  }
+  return collapse_count;
+}
+
+// Just a polish pass — flip + smooth, no collapse. Used for the trailing
+// 20-iteration loop in the original schedule (after collapses converge).
+void polishShellOnce() {
+  if (!g_cage || !g_options) return;
+  prism::local::wildflip_pass(*g_cage, *g_options);
+  prism::local::localsmooth_pass(*g_cage, *g_options);
+}
+
+// Snapshot the current cage into the same ShellResult format as buildShell.
+ShellResult getShell() {
+  ShellResult r;
+  if (!g_cage) return r;
+  size_t nVOut = g_cage->mid.size();
+  r.midV.resize(nVOut * 3);
+  r.baseV.resize(nVOut * 3);
+  r.topV.resize(nVOut * 3);
+  for (size_t i = 0; i < nVOut; ++i) {
+    for (int k = 0; k < 3; ++k) {
+      r.midV[3 * i + k] = g_cage->mid[i][k];
+      r.baseV[3 * i + k] = g_cage->base[i][k];
+      r.topV[3 * i + k] = g_cage->top[i][k];
+    }
+  }
+  r.F.resize(g_cage->F.size() * 3);
+  for (size_t i = 0; i < g_cage->F.size(); ++i) {
+    r.F[3 * i + 0] = g_cage->F[i][0];
+    r.F[3 * i + 1] = g_cage->F[i][1];
+    r.F[3 * i + 2] = g_cage->F[i][2];
+  }
+  r.numFreeze = g_cage->ref.aabb ? g_cage->ref.aabb->num_freeze : 0;
   r.thickness.resize(nVOut);
   for (size_t i = 0; i < nVOut; ++i) {
     Vec3d delta = g_cage->top[i] - g_cage->base[i];
@@ -205,5 +280,9 @@ EMSCRIPTEN_BINDINGS(prism_full_wasm) {
   register_vector<int>("VectorInt");
 
   function("buildShell", &prism_wasm::buildShell);
+  function("setRemeshOptions", &prism_wasm::setRemeshOptions);
+  function("growShellOnce", &prism_wasm::growShellOnce);
+  function("polishShellOnce", &prism_wasm::polishShellOnce);
+  function("getShell", &prism_wasm::getShell);
   function("projectPoints", &prism_wasm::projectPoints);
 }
