@@ -109,6 +109,9 @@ if(NOT PRISM_WASM)
   target_link_libraries(breve_bin prism_library CLI11::CLI11 json)
 endif()
 
+add_executable(prism_native_diag wasm/prism_native_diag.cpp)
+target_link_libraries(prism_native_diag PRIVATE prism_library)
+
 if(PRISM_WASM)
   add_executable(prism_full_wasm wasm/prism_full_wasm.cpp)
   target_link_libraries(prism_full_wasm PRIVATE prism_library)

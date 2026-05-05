@@ -415,6 +415,7 @@ async function rebuild() {
     const geom = makeMeshGeometry(geomName);
     ({ V, F } = indexAndDedupe(geom));
   }
+  window.__VF = { V, F };
 
   // Normalise every input mesh to the same bbox half-extent so the slider
   // (interpreted as an absolute extrusion distance by PrismCage) means the
