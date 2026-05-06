@@ -370,10 +370,6 @@ function buildLineSegments(qP, imgP, hit, color) {
 
 // ---------- main rebuild loop ----------
 let Module = null;
-// Cached results of the last expensive build (geometry + remesh_schedule).
-// Visual-only changes (shell-map toggle, surface, queries, etc.) reuse this
-// without re-running PrismCage construction.
-let g_lastBuild = null;
 
 function clearGroup(g) {
   while (g.children.length) {
@@ -641,42 +637,6 @@ async function rebuild() {
     `queries=${nQ} hit=${hits} (lower=${lower}, upper=${upper}) · ` +
     `${dt.toFixed(0)} ms` + thickStats);
   setError("");
-
-  // Cache the build so visual-only toggles can re-render without re-running
-  // the expensive PrismCage construction + remesh_schedule pipeline.
-  g_lastBuild = {
-    geomName, V, F, midV, baseV, topV, Fout, thicknessArr,
-    queries: { Q, imgP, hit },
-  };
-}
-
-// Re-render with the cached build, after a visual checkbox or pattern slider
-// changes. Cheap.
-function rerenderCached() {
-  if (!g_lastBuild) return;
-  const { midV, baseV, topV, Fout, thicknessArr, queries } = g_lastBuild;
-  renderShell(midV, baseV, topV, Fout, thicknessArr, queries);
-}
-
-// Re-sample query points and re-project them through the (cached) shell.
-// Skips PrismCage construction; only runs Module.projectPoints.
-function reseedQueries() {
-  if (!g_lastBuild || !Module) return;
-  const { baseV, midV, topV, Fout, thicknessArr } = g_lastBuild;
-  const nQ = parseInt(document.getElementById("nq").value, 10);
-  const Q = sampleQueriesInShell(baseV, midV, topV, Fout, nQ);
-  let proj;
-  try {
-    proj = Module.projectPoints(Array.from(Q));
-  } catch (e) {
-    setError("projectPoints threw: " + (e?.message || e));
-    return;
-  }
-  const imgP = vecToFloat64(proj.imageP);
-  const hit = vecToInt32(proj.hit);
-  deleteVecs(proj);
-  g_lastBuild.queries = { Q, imgP, hit };
-  renderShell(midV, baseV, topV, Fout, thicknessArr, g_lastBuild.queries);
 }
 
 function bindUI() {
@@ -691,20 +651,15 @@ function bindUI() {
   });
   document.getElementById("nq").addEventListener("input", (e) => {
     document.getElementById("nqVal").textContent = ` (${e.target.value})`;
-    // Query count is a visual-only knob — only re-sample + re-project, no
-    // need to rebuild the cage.
-    if (g_lastBuild) reseedQueries(); else scheduleRebuild();
+    scheduleRebuild();
   });
-  // Visual-only toggles & pattern controls — re-render the cached build,
-  // don't re-run PrismCage construction.
   for (const id of ["showShell", "showSurface", "showLines", "showQueries",
                     "showShellMap", "smPattern"]) {
-    document.getElementById(id).addEventListener("change", rerenderCached);
+    document.getElementById(id).addEventListener("change", rebuild);
   }
-  document.getElementById("smScale").addEventListener("input", rerenderCached);
-  document.getElementById("smBump").addEventListener("input", rerenderCached);
-  // Re-sample → keep the cage but re-pick query points and re-render.
-  document.getElementById("reseed").addEventListener("click", reseedQueries);
+  document.getElementById("smScale").addEventListener("input", rebuild);
+  document.getElementById("smBump").addEventListener("input", rebuild);
+  document.getElementById("reseed").addEventListener("click", rebuild);
 }
 
 let _rebuildPending = null;
