@@ -17,13 +17,15 @@
 
 import * as THREE from "three";
 
-// 8 boundary triangles of the unit prism (winding outward).
+// We render ONLY the top triangle (vertices 3,4,5 = top[a], top[b], top[c]).
+// Side rectangles are intentionally omitted: at silhouettes they'd render the
+// prism's side wall, where the heightmap raymarch enters tangentially and
+// often falls back to the valley shade — visible as black walls between
+// neighbouring prisms. With only the top, every fragment enters through the
+// outer surface (canonical t = 1) and marches inward to t = 0; for a closed
+// input mesh that's all the camera ever sees from outside.
 const PRISM_TRIS = [
-  [0, 2, 1],                                  // bottom (base/mid)
-  [3, 4, 5],                                  // top    (mid/top)
-  [0, 1, 4], [0, 4, 3],                       // 3 side rectangles
-  [1, 2, 5], [1, 5, 4],
-  [2, 0, 3], [2, 3, 5],
+  [3, 4, 5],
 ];
 
 const VERTEX_SHADER = /* glsl */`
@@ -183,49 +185,68 @@ float fbm(vec2 p) {
   return v;
 }
 
-// Hex bumps: rounded hexagons on a brick lattice.
-float hexBumps(vec2 uv) {
+// Hex bumps in 2D — used inside triplanar.
+float hexBumps2D(vec2 uv) {
   vec2 s = uv * vec2(uPatternScale * 1.732, uPatternScale);
   vec2 h1 = vec2(s.x, s.y);
   vec2 h2 = vec2(s.x + uPatternScale * 0.866, s.y + 0.5);
   vec2 c1 = h1 - (floor(h1) + 0.5);
   vec2 c2 = h2 - (floor(h2) + 0.5);
-  float d1 = length(c1);
-  float d2 = length(c2);
-  float d = min(d1, d2);
+  float d = min(length(c1), length(c2));
   return smoothstep(0.5, 0.15, d);
 }
 
-// Stretcher-bond bricks with rounded shoulders.
-float brickBumps(vec2 uv) {
+// Stretcher-bond bricks in 2D.
+float brickBumps2D(vec2 uv) {
   float row = floor(uv.y * uPatternScale);
   vec2 b = vec2(uv.x * uPatternScale + 0.5 * mod(row, 2.0),
                 uv.y * uPatternScale);
   vec2 c = abs(fract(b) - 0.5);
-  // Mortar gap: distance from cell edge.
   float gap = 0.5 - max(c.x, c.y);
   return smoothstep(0.0, 0.08, gap);
 }
 
-float heightmap(vec2 uv) {
-  float h;
-  if (uPattern == 0) h = hexBumps(uv);
-  else if (uPattern == 1) h = brickBumps(uv);
-  else h = fbm(uv * uPatternScale);
-  return h * uBumpHeight;
+float pattern2D(vec2 uv) {
+  if (uPattern == 0) return hexBumps2D(uv);
+  if (uPattern == 1) return brickBumps2D(uv);
+  return fbm(uv * uPatternScale);
+}
+
+// Triplanar evaluation: sample the 2D pattern in three orthogonal planes
+// and blend by squared world-space normal weights. Drives all three
+// patterns from a single 3D world-space coordinate, so they tile
+// continuously across adjacent prisms even though each prism's local
+// (u, v) parameterisation is discontinuous at its triangular boundary.
+float triplanar(vec3 p, vec3 n) {
+  vec3 w = abs(normalize(n));
+  w = pow(w, vec3(4.0));         // sharper blend
+  w /= (w.x + w.y + w.z + 1e-6);
+  return w.x * pattern2D(p.yz)
+       + w.y * pattern2D(p.zx)
+       + w.z * pattern2D(p.xy);
+}
+
+float heightmap(vec3 worldP, vec3 nWorld) {
+  return triplanar(worldP, nWorld) * uBumpHeight;
+}
+
+// The bijective image of (u, v) on the mid surface. For the upper slab,
+// vC0..vC2 are mid corners (canonical t = 0).
+vec3 midImage(vec3 uvt) {
+  return (1.0 - uvt.x - uvt.y) * vC0 + uvt.x * vC1 + uvt.y * vC2;
 }
 
 void main() {
   vec3 ro = vWorldPos;
   vec3 rd = normalize(vWorldPos - cameraPosition);
 
-  // Track the last known (u, v) so that if the ray exits the prism without
-  // crossing the bump surface, we can shade as the base mid surface (i.e.,
-  // the heightmap's "valley" floor) using the smoothest local lambertian
-  // approximation. This avoids holes through valleys in high-frequency
-  // patterns like FBM noise.
-  vec3 lastUvt = vec3(0.5, 0.5, 0.0);
+  // Surface normal estimate — the prism's pillar (mid-to-top vector). Used
+  // as the triplanar blending normal so every fragment in this prism uses
+  // a consistent projection axis.
+  vec3 nSurface = normalize(vC3 - vC0);
+
   bool everInside = false;
+  vec3 lastUvt = vec3(0.5, 0.5, 0.0);
   for (int i = 0; i < 256; ++i) {
     if (i >= uMaxSteps) break;
     vec3 p = ro + rd * (float(i) * uStepSize);
@@ -234,30 +255,37 @@ void main() {
     everInside = true;
     lastUvt = uvt;
 
-    float h = heightmap(uvt.xy);
+    // Heightmap is driven by the bijective IMAGE on the mid surface — a
+    // 3D world-space coordinate that's continuous across prism boundaries
+    // (because the original mesh shares vertices/edges between faces).
+    // This kills the "different stretching per prism" artefact: the same
+    // world-space point gives the same height regardless of which prism
+    // the ray is currently traversing.
+    vec3 imgP = midImage(uvt);
+    float h = heightmap(imgP, nSurface);
     if (uvt.z <= h) {
       const float dx = 0.005;
-      float hu = heightmap(uvt.xy + vec2(dx, 0.0));
-      float hv = heightmap(uvt.xy + vec2(0.0, dx));
+      float hu = heightmap(midImage(uvt + vec3(dx, 0, 0)), nSurface);
+      float hv = heightmap(midImage(uvt + vec3(0, dx, 0)), nSurface);
       vec3 n_canon = normalize(vec3(-(hu - h) / dx, -(hv - h) / dx, 1.0));
-      vec3 up = normalize(vC3 - vC0);
       vec3 du = normalize(vC1 - vC0);
       vec3 dv = normalize(vC2 - vC0);
-      vec3 n_world = normalize(n_canon.x * du + n_canon.y * dv + n_canon.z * up);
+      vec3 n_world = normalize(n_canon.x * du + n_canon.y * dv + n_canon.z * nSurface);
 
       float diffuse = max(0.15, dot(n_world, normalize(uLightDir)));
-      vec3 col = mix(uTintLow, uTintHigh, smoothstep(0.0, 1.0, h / max(uBumpHeight, 1e-6)));
+      vec3 col = mix(uTintLow, uTintHigh,
+                     smoothstep(0.0, 1.0, h / max(uBumpHeight, 1e-6)));
       gl_FragColor = vec4(col * diffuse, 1.0);
       return;
     }
   }
 
-  // Ray didn't hit the bump surface — shade as the smooth "valley floor"
-  // using the prism's pillar as a normal. Same colour ramp as h=0.
+  // Ray exited the prism without hitting. Shade as the "valley floor" —
+  // smooth surface lit by the directional light. Uses the brightest end of
+  // the colour ramp to avoid the dark-walls artefact at silhouettes.
   if (!everInside) discard;
-  vec3 up = normalize(vC3 - vC0);
-  float diffuse = max(0.15, dot(up, normalize(uLightDir)));
-  gl_FragColor = vec4(uTintLow * diffuse, 1.0);
+  float diffuse = max(0.15, dot(nSurface, normalize(uLightDir)));
+  gl_FragColor = vec4(mix(uTintLow, uTintHigh, 0.4) * diffuse, 1.0);
 }
 `;
 
@@ -266,8 +294,8 @@ export function createShellMappingMesh(baseV, midV, topV, F, options = {}) {
     pattern: 0,            // 0 hex, 1 bricks, 2 fbm
     patternScale: 8.0,
     bumpHeight: 0.7,
-    stepSize: 0.005,
-    maxSteps: 96,
+    stepsPerSlab: 64,      // samples to traverse one prism's thickness
+    maxSteps: 192,
     tintLow: new THREE.Color(0x2a4060),
     tintHigh: new THREE.Color(0xffd28a),
     lightDir: new THREE.Vector3(0.5, 0.7, 0.5),
@@ -324,6 +352,8 @@ export function createShellMappingMesh(baseV, midV, topV, F, options = {}) {
 
   let minX=Infinity, minY=Infinity, minZ=Infinity;
   let maxX=-Infinity, maxY=-Infinity, maxZ=-Infinity;
+  // Median per-pillar thickness (mid -> top), used to set raymarch step.
+  const pillarLens = [];
   for (let i = 0; i < midV.length; i += 3) {
     minX = Math.min(minX, baseV[i], topV[i]);
     minY = Math.min(minY, baseV[i+1], topV[i+1]);
@@ -331,7 +361,16 @@ export function createShellMappingMesh(baseV, midV, topV, F, options = {}) {
     maxX = Math.max(maxX, baseV[i], topV[i]);
     maxY = Math.max(maxY, baseV[i+1], topV[i+1]);
     maxZ = Math.max(maxZ, baseV[i+2], topV[i+2]);
+    const dx = topV[i] - midV[i];
+    const dy = topV[i+1] - midV[i+1];
+    const dz = topV[i+2] - midV[i+2];
+    pillarLens.push(Math.sqrt(dx*dx + dy*dy + dz*dz));
   }
+  pillarLens.sort((a, b) => a - b);
+  const medianPillar = pillarLens[Math.floor(pillarLens.length / 2)] || 0.05;
+  // Step size = slab_thickness / stepsPerSlab. Cosine-of-grazing-angle
+  // factor of 1/2 is folded into maxSteps so an oblique ray still finishes.
+  const stepSize = Math.max(medianPillar / opts.stepsPerSlab, 1e-4);
   geom.boundingBox = new THREE.Box3(
     new THREE.Vector3(minX, minY, minZ),
     new THREE.Vector3(maxX, maxY, maxZ));
@@ -342,7 +381,7 @@ export function createShellMappingMesh(baseV, midV, topV, F, options = {}) {
       uPatternScale: { value: opts.patternScale },
       uBumpHeight: { value: opts.bumpHeight },
       uPattern: { value: opts.pattern },
-      uStepSize: { value: opts.stepSize },
+      uStepSize: { value: stepSize },
       uMaxSteps: { value: opts.maxSteps },
       uTintLow: { value: new THREE.Vector3(opts.tintLow.r, opts.tintLow.g, opts.tintLow.b) },
       uTintHigh: { value: new THREE.Vector3(opts.tintHigh.r, opts.tintHigh.g, opts.tintHigh.b) },
