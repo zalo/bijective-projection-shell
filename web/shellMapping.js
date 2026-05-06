@@ -291,9 +291,12 @@ void main() {
     }
   }
 
-  if (!everInside) discard;
-  float diffuse = max(0.15, dot(nSurface, normalize(uLightDir)));
-  gl_FragColor = vec4(mix(uTintLow, uTintHigh, 0.4) * diffuse, 1.0);
+  // Ray either exited the shell volume entirely or fell out the side
+  // through a non-traversable boundary. Either way, no bump intersection
+  // — discard so the shell looks like a transparent layer with only the
+  // displaced bumps opaque. The (optional) mid surface mesh below
+  // provides the smooth silhouette if the user has the "surface" toggle on.
+  discard;
 }
 `;
 
