@@ -265,17 +265,25 @@ void main() {
         float nb = findContainingNeighbor(currentPrism, p, uvt);
         if (nb >= 0.0) {
           currentPrism = nb;
-          nSurface = prismPillar(currentPrism);
+          // Intentionally do NOT refresh nSurface here. Triplanar weights
+          // are derived from the prism's pillar; if we update on hop the
+          // weights change abruptly at prism boundaries and the heightmap
+          // appears to seam where the ray crosses into a neighbour.
+          // Keeping the entry-prism's pillar gives perfectly continuous
+          // h(imgP) across hops, at the (visually negligible) cost of
+          // slightly off-axis triplanar blending far from the entry.
           ++hops;
           found = true;
         }
       }
       if (!found) {
-        // Numerical limbo: ray sits in a thin gap along a shared edge
-        // where neither this prism nor its immediate neighbours quite
-        // claim it. Advance one step and try again. If we never got
-        // inside (camera-grazing pixel), discard early.
-        if (!everInside) discard;
+        // Numerical limbo: the sample sits in a thin gap where neither
+        // the current prism nor its immediate neighbours quite claim it.
+        // This happens at tet-internal edges (between adjacent tetrahedra
+        // of one prism) and at prism-shared edges. Always continue past:
+        // the next step will normally re-enter a valid tet. If the ray
+        // really never enters the shell, the trailing discard at the end
+        // of main() still fires.
         continue;
       }
     }
