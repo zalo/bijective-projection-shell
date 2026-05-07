@@ -207,17 +207,17 @@ float pattern2D(vec2 uv) {
   return fbm(uv * uPatternScale);
 }
 
-float triplanar(vec3 p, vec3 n) {
-  vec3 w = abs(normalize(n));
-  w = pow(w, vec3(4.0));
-  w /= (w.x + w.y + w.z + 1e-6);
-  return w.x * pattern2D(p.yz)
-       + w.y * pattern2D(p.zx)
-       + w.z * pattern2D(p.xy);
+// Equal-weighted triplanar: identical at the same world point regardless of
+// prism, so the heightmap is fully continuous across prism-shared edges and
+// vertex pillars. The pattern looks slightly softer than a surface-aligned
+// blend would, but eliminates the mosaic of seams that appear when adjacent
+// prisms compute different blend weights for the same world point.
+float triplanar(vec3 p) {
+  return (pattern2D(p.yz) + pattern2D(p.zx) + pattern2D(p.xy)) / 3.0;
 }
 
-float heightmap(vec3 worldP, vec3 nWorld) {
-  return triplanar(worldP, nWorld) * uBumpHeight;
+float heightmap(vec3 worldP) {
+  return triplanar(worldP) * uBumpHeight;
 }
 
 // Mid-surface image of a (u, v) inside the upper slab. mid corners are
@@ -245,8 +245,13 @@ float findContainingNeighbor(float prismIdx, vec3 p, out vec3 uvt) {
 }
 
 void main() {
-  vec3 ro = vWorldPos;
+  // Start the ray slightly *inside* the top face along the inward direction.
+  // The interpolated vWorldPos sits exactly on the top triangle, so the
+  // first point_in_tet test would be on the boundary face, where orient_3d
+  // is at the limit of EPS. A 5% nudge guarantees the first sample is
+  // unambiguously inside tet 0.
   vec3 rd = normalize(vWorldPos - cameraPosition);
+  vec3 ro = vWorldPos + rd * uStepSize * 0.5;
 
   float currentPrism = vPrismIdx;
   vec3 nSurface = prismPillar(currentPrism);
@@ -290,11 +295,11 @@ void main() {
     everInside = true;
 
     vec3 imgP = midImage(currentPrism, uvt);
-    float h = heightmap(imgP, nSurface);
+    float h = heightmap(imgP);
     if (uvt.z <= h) {
       const float dx = 0.005;
-      float hu = heightmap(midImage(currentPrism, uvt + vec3(dx, 0, 0)), nSurface);
-      float hv = heightmap(midImage(currentPrism, uvt + vec3(0, dx, 0)), nSurface);
+      float hu = heightmap(midImage(currentPrism, uvt + vec3(dx, 0, 0)));
+      float hv = heightmap(midImage(currentPrism, uvt + vec3(0, dx, 0)));
       vec3 n_canon = normalize(vec3(-(hu - h) / dx, -(hv - h) / dx, 1.0));
       vec3 du = normalize(prismCorner(currentPrism, 1) - prismCorner(currentPrism, 0));
       vec3 dv = normalize(prismCorner(currentPrism, 2) - prismCorner(currentPrism, 0));
