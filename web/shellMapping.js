@@ -81,7 +81,12 @@ float orient3d(vec3 a, vec3 b, vec3 c, vec3 d) {
 }
 
 bool point_in_tet(vec3 p, vec3 T0, vec3 T1, vec3 T2, vec3 T3) {
-  const float EPS = -1e-7;
+  // EPS in orient_3d units (signed determinant). Tightening to 1e-7 left
+  // thin numerical "no-prism" gaps along shared edges where neither side
+  // claimed the boundary; relaxing to 5e-5 closes those gaps without
+  // bleeding into wrong tets because adjacent prisms' orient_3d values
+  // at a real boundary differ by much more.
+  const float EPS = -5e-5;
   return orient3d(T0, T3, T1, p) >= EPS
       && orient3d(T1, T3, T2, p) >= EPS
       && orient3d(T0, T1, T2, p) >= EPS
@@ -255,19 +260,23 @@ void main() {
     vec3 uvt;
     if (!decomposeAny(currentPrism, p, uvt)) {
       // Try walking to a side neighbour.
+      bool found = false;
       if (hops < uMaxPrismHops) {
         float nb = findContainingNeighbor(currentPrism, p, uvt);
         if (nb >= 0.0) {
           currentPrism = nb;
           nSurface = prismPillar(currentPrism);
           ++hops;
-          // Re-decompose once (already done by findContainingNeighbor) and
-          // fall through to the heightmap test below.
-        } else {
-          break;
+          found = true;
         }
-      } else {
-        break;
+      }
+      if (!found) {
+        // Numerical limbo: ray sits in a thin gap along a shared edge
+        // where neither this prism nor its immediate neighbours quite
+        // claim it. Advance one step and try again. If we never got
+        // inside (camera-grazing pixel), discard early.
+        if (!everInside) discard;
+        continue;
       }
     }
     everInside = true;
